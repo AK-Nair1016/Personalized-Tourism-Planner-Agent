@@ -1,0 +1,97 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Country {
+  id             String   @id @default(uuid())
+  name           String   @unique
+  currencyCode   String
+  currencySymbol String
+  cities         City[]
+  createdAt      DateTime @default(now())
+
+  @@map("countries")
+}
+
+model City {
+  id          String       @id @default(uuid())
+  countryId   String
+  country     Country      @relation(fields: [countryId], references: [id])
+  name        String       @unique
+  timezone    String
+  attractions Attraction[]
+  itineraries Itinerary[]
+  createdAt   DateTime     @default(now())
+
+  @@map("cities")
+}
+
+model Category {
+  id          String       @id @default(uuid())
+  name        String       @unique
+  vibeTags    String[]     // which vibes this category maps to
+  attractions Attraction[]
+  createdAt   DateTime     @default(now())
+
+  @@map("categories")
+}
+
+model Attraction {
+  id                 String   @id @default(uuid())
+  placeId            String   @unique  // Google Places ID — used for upserts
+  cityId             String
+  city               City     @relation(fields: [cityId], references: [id])
+  categoryId         String
+  category           Category @relation(fields: [categoryId], references: [id])
+  name               String
+  description        String?
+  avgCost            Float    // in INR
+  avgDurationMinutes Int
+  latitude           Float
+  longitude          Float
+  rating             Float?
+  reviewCount        Int      @default(0)
+  bestTimeSlot       String   // morning | afternoon | evening
+  indoorOutdoor      String   // indoor | outdoor | both
+  intensityLevel     Int      // 1-5
+  vibeTags           String[] // subset of vibe archetypes
+  bookingUrl         String?
+  createdAt          DateTime @default(now())
+
+  @@map("attractions")
+}
+
+model Itinerary {
+  id                  String       @id @default(uuid())
+  cityId              String
+  city                City         @relation(fields: [cityId], references: [id])
+  userProfileJson     Json         // the full user input schema
+  itineraryJson       Json         // the full reconciler output
+  totalCostEstimate   Float
+  createdAt           DateTime     @default(now())
+  replanLogs          ReplanLog[]
+
+  @@map("itineraries")
+}
+
+model ReplanLog {
+  id                    String    @id @default(uuid())
+  itineraryId           String
+  itinerary             Itinerary @relation(fields: [itineraryId], references: [id])
+  disruptionJson        Json      // { day, slot, description }
+  updatedItineraryJson  Json      // post-replan full itinerary
+  executionTimeMs       Int
+  createdAt             DateTime  @default(now())
+
+  @@map("replan_logs")
+}

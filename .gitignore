@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Environment variables - NEVER commit these
+.env
+.env.local
+.env.production
+.env.development
+
+# Prisma generated client
+generated/
+backend/generated/
+
+# Vite build output
+dist/
+frontend/dist/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Prisma migrations lock (keep migrations folder but ignore this)
+prisma/migrations/migration_lock.toml
+```
+
+---
+
+Place this file at the root of your project:
+```
+vibetrip/
+├── .gitignore    ← here
+├── frontend/
+├── backend/
+└── README.md

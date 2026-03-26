@@ -1,0 +1,30 @@
+.chipSelect {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.chip {
+  padding: 10px 14px;
+  border: 1px solid #d1d5db;
+  border-radius: 9999px;
+  background-color: #ffffff;
+  color: #1f2937;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.chip:hover {
+  border-color: #9ca3af;
+}
+
+.selected {
+  border-color: #3b82f6;
+  background-color: #eff6ff;
+  color: #1d4ed8;
+}
+
+.chipLabel {
+  font-size: 14px;
+  font-weight: 500;
+}

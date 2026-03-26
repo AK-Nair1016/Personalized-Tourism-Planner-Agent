@@ -1,0 +1,27 @@
+.optionCard {
+  padding: 12px 16px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background-color: #ffffff;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  transition: all 0.2s;
+}
+
+.optionCard.selected {
+  border: 2px solid #3b82f6;
+  background-color: #eff6ff;
+}
+
+.optionCardLabel {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1f2937;
+}
+
+.optionCardDescription {
+  margin-top: 4px;
+  font-size: 13px;
+  color: #6b7280;
+}

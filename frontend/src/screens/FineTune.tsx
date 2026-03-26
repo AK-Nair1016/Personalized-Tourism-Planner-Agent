@@ -1,4 +1,5 @@
 import type { UserProfile } from '../types/userProfile';
+import NavigationButtons from '../components/ui/NavigationButtons';
 
 type FineTuneProps = {
   userProfile: UserProfile;
@@ -39,22 +40,11 @@ export default function FineTune({
           </button>
         </div>
 
-        <div className="mt-6 flex justify-between">
-          <button
-            className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700"
-            onClick={onBack}
-            type="button"
-          >
-            Back
-          </button>
-          <button
-            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white"
-            onClick={onSubmit}
-            type="button"
-          >
-            Submit
-          </button>
-        </div>
+        <NavigationButtons
+          nextLabel="Submit"
+          onBack={onBack}
+          onNext={onSubmit}
+        />
       </div>
     </section>
   );

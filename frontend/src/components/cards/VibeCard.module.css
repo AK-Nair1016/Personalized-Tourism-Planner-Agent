@@ -1,0 +1,27 @@
+.vibeCard {
+  padding: 16px;
+  border: 1px solid #d1d5db;
+  border-radius: 12px;
+  background-color: #ffffff;
+  cursor: pointer;
+  width: 100%;
+  text-align: center;
+  transition: all 0.2s;
+}
+
+.vibeCard.selected {
+  border: 2px solid #3b82f6;
+  background-color: #eff6ff;
+}
+
+.vibeCardEmoji {
+  display: block;
+  font-size: 28px;
+  margin-bottom: 6px;
+}
+
+.vibeCardLabel {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2937;
+}

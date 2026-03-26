@@ -1,0 +1,46 @@
+.navigationButtons {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.navigationButtons.nextOnly {
+  justify-content: flex-end;
+}
+
+.button {
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  border: 1px solid transparent;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.backButton {
+  background-color: #ffffff;
+  border-color: #d1d5db;
+  color: #374151;
+}
+
+.backButton:hover {
+  background-color: #f9fafb;
+}
+
+.nextButton {
+  background-color: #2563eb;
+  color: #ffffff;
+}
+
+.nextButton:hover:not(:disabled) {
+  background-color: #1d4ed8;
+}
+
+.nextButtonDisabled {
+  background-color: #d1d5db;
+  color: #6b7280;
+  cursor: not-allowed;
+}

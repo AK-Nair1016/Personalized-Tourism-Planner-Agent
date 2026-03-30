@@ -1,0 +1,202 @@
+.screen {
+  min-height: calc(100vh - 56px);
+  padding: 2rem 1.25rem 3rem;
+  background:
+    radial-gradient(circle at top left, rgba(45, 212, 191, 0.22), transparent 30%),
+    radial-gradient(circle at top right, rgba(251, 146, 60, 0.24), transparent 28%),
+    linear-gradient(160deg, #effcf7 0%, #f8f7ff 48%, #fff5eb 100%);
+}
+
+.panel {
+  width: min(100%, 1100px);
+  margin: 0 auto;
+  padding: 2rem;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 32px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.84)),
+    linear-gradient(135deg, rgba(45, 212, 191, 0.08), rgba(249, 115, 22, 0.08));
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.12);
+  backdrop-filter: blur(14px);
+}
+
+.hero {
+  padding: 1.5rem;
+  border-radius: 24px;
+  background: linear-gradient(135deg, #0f766e 0%, #14b8a6 52%, #fb923c 100%);
+  color: #f8fffd;
+  box-shadow: 0 20px 45px rgba(20, 184, 166, 0.22);
+}
+
+.step {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.35rem 0.75rem;
+  margin: 0 0 1rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 0;
+  font-size: clamp(2rem, 4vw, 3.2rem);
+  line-height: 1.05;
+  font-weight: 900;
+}
+
+.subtitle {
+  max-width: 48rem;
+  margin: 0.85rem 0 0;
+  font-size: 1rem;
+  line-height: 1.7;
+  color: rgba(248, 255, 253, 0.94);
+}
+
+.section {
+  margin-top: 2rem;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.sectionTitle {
+  margin: 0 0 1rem;
+  color: #1f2937;
+  font-size: 1.3rem;
+  font-weight: 800;
+}
+
+.sectionHeader .sectionTitle {
+  margin-bottom: 0;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.45rem 0.9rem;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #0f766e, #0ea5e9);
+  color: #f8fafc;
+  font-size: 0.9rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.cityGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.cityOption {
+  padding: 0.9rem;
+  border: 1px solid rgba(45, 212, 191, 0.18);
+  border-radius: 24px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(240, 253, 250, 0.9)),
+    linear-gradient(135deg, rgba(45, 212, 191, 0.1), rgba(251, 146, 60, 0.08));
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.88)),
+    linear-gradient(135deg, rgba(14, 165, 233, 0.06), rgba(249, 115, 22, 0.06));
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+}
+
+.fullWidth {
+  width: 100%;
+}
+
+.fieldLabel {
+  color: #374151;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.input {
+  width: 100%;
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #111827;
+  font-size: 0.98rem;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.2s ease;
+}
+
+.input:focus {
+  outline: none;
+  border-color: #14b8a6;
+  box-shadow: 0 0 0 4px rgba(20, 184, 166, 0.16);
+  transform: translateY(-1px);
+}
+
+.input::placeholder {
+  color: #94a3b8;
+}
+
+.navigation {
+  margin-top: 2rem;
+}
+
+@media (max-width: 900px) {
+  .cityGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .screen {
+    padding: 1rem 0.85rem 2rem;
+  }
+
+  .panel {
+    padding: 1.1rem;
+    border-radius: 24px;
+  }
+
+  .hero {
+    padding: 1.25rem;
+  }
+
+  .sectionHeader {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .formGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .cityGrid {
+    grid-template-columns: 1fr;
+  }
+}

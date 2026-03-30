@@ -14,6 +14,9 @@ backend/generated/
 dist/
 frontend/dist/
 
+# Context file
+CONTEXT.md
+
 # Logs
 *.log
 npm-debug.log*

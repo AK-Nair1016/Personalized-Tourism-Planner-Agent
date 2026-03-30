@@ -1,32 +1,58 @@
 import { useEffect } from 'react';
+import styles from './Loading.module.css';
 
-type LoadingProps = {
-  onDone?: () => void;
-};
+interface LoadingProps {
+  onDone: () => void;
+}
+
+const AGENTS = [
+  { name: 'Vibe Agent', status: 'Matching places to your personality...' },
+  { name: 'Budget Agent', status: 'Allocating your budget across days...' },
+  { name: 'Logistics Agent', status: 'Clustering spots to cut travel time...' },
+  { name: 'Diversity Agent', status: 'Checking your plan for variety...' },
+  { name: 'Reconciler Agent', status: 'Building your final itinerary...' },
+];
 
 export default function Loading({ onDone }: LoadingProps) {
   useEffect(() => {
-    if (!onDone) {
-      return;
-    }
+    const timeoutId = window.setTimeout(onDone, 2800);
 
-    const timer = window.setTimeout(() => {
-      onDone();
-    }, 900);
-
-    return () => window.clearTimeout(timer);
+    return () => window.clearTimeout(timeoutId);
   }, [onDone]);
 
   return (
-    <section className="mx-auto max-w-4xl px-6 py-16">
-      <div className="rounded-2xl border border-gray-200 bg-white p-6 text-center shadow-sm">
-        <p className="text-sm font-medium text-blue-600">Loading</p>
-        <h2 className="mt-2 text-2xl font-semibold text-gray-900">
-          Preparing placeholder itinerary
-        </h2>
-        <p className="mt-2 text-sm text-gray-600">
-          This is a shell loading screen for now.
-        </p>
+    <section className={styles.screen}>
+      <div className={styles.panel}>
+        <div className={styles.hero}>
+          <p className={styles.step}>Almost there</p>
+          <h2 className={styles.title}>Planning your trip...</h2>
+          <p className={styles.subtitle}>
+            Your planning agents are combining vibe, timing, budget, and route
+            logic into one itinerary.
+          </p>
+        </div>
+
+        <div className={styles.progressShell}>
+          <div className={styles.progressTrack}>
+            <div className={styles.progressFill} />
+          </div>
+        </div>
+
+        <div className={styles.agentList}>
+          {AGENTS.map((agent, index) => (
+            <div
+              className={styles.agentCard}
+              key={agent.name}
+              style={{ animationDelay: `${index * 0.16}s` }}
+            >
+              <div className={styles.agentMeta}>
+                <span className={styles.agentDot} />
+                <span className={styles.agentName}>{agent.name}</span>
+              </div>
+              <span className={styles.agentStatus}>{agent.status}</span>
+            </div>
+          ))}
+        </div>
       </div>
     </section>
   );

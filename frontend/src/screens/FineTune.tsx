@@ -1,7 +1,7 @@
 import OptionCard from '../components/cards/OptionCard';
 import ChipSelect from '../components/ui/ChipSelect';
 import NavigationButtons from '../components/ui/NavigationButtons';
-import type { AgeGroup, Dietary, UserProfile } from '../types/userProfile';
+import type { AgeGroup, Dietary, UserProfile } from '@vibetrip/shared/types/userProfile';
 import styles from './FineTune.module.css';
 
 interface FineTuneProps {

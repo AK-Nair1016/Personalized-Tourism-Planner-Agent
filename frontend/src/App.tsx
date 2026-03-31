@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { defaultUserProfile } from './types/userProfile';
-import type { UserProfile } from './types/userProfile';
+import { defaultUserProfile } from '@vibetrip/shared/types/userProfile';
+import type { UserProfile } from '@vibetrip/shared/types/userProfile';
 import ProgressBar from './components/ui/ProgressBar';
 import VibePicker from './screens/VibePicker';
 import TripBasics from './screens/TripBasics';

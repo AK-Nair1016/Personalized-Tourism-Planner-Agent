@@ -1,7 +1,7 @@
 import VibeCard from '../components/cards/VibeCard';
 import OptionCard from '../components/cards/OptionCard';
 import NavigationButtons from '../components/ui/NavigationButtons';
-import { UserProfile, Vibe, Group } from '../types/userProfile';
+import { UserProfile, Vibe, Group } from '@vibetrip/shared/types/userProfile';
 import styles from './VibePicker.module.css';
 
 interface VibePickerProps {

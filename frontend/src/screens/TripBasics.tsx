@@ -1,6 +1,6 @@
 import CityCard from '../components/cards/CityCard';
 import NavigationButtons from '../components/ui/NavigationButtons';
-import type { UserProfile } from '../types/userProfile';
+import type { UserProfile } from '@vibetrip/shared/types/userProfile';
 import styles from './TripBasics.module.css';
 
 interface TripBasicsProps {

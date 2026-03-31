@@ -1,4 +1,4 @@
-import type { UserProfile } from '../types/userProfile';
+import type { UserProfile } from '@vibetrip/shared/types/userProfile';
 import styles from './Itinerary.module.css';
 
 interface ItineraryProps {

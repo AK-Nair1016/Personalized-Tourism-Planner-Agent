@@ -1,4 +1,4 @@
-import { UserProfile } from '../types/userProfile';
+import { UserProfile } from '@vibetrip/shared/types/userProfile';
 
 export async function generateItinerary(userProfile: UserProfile) {
   // Day 5 - wire real API call here

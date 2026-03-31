@@ -32,3 +32,66 @@
 - Main branch: `dev-v1`
 - Feature branches per file/phase
 - Current branch: merge `feat/types` to `dev-v1` ✓
+Personalized-Tourism-Planner-Agent/
+│
+├── shared/
+│   ├── package.json
+│   └── types/
+│       └── userProfile.ts          # single source of truth for types
+│
+├── frontend/
+│   └── src/
+│       ├── components/
+│       │   ├── cards/
+│       │   │   ├── VibeCard.tsx
+│       │   │   ├── VibeCard.module.css
+│       │   │   ├── CityCard.tsx
+│       │   │   ├── CityCard.module.css
+│       │   │   └── OptionCard.tsx
+│       │   │   └── OptionCard.module.css
+│       │   └── ui/
+│       │       ├── ProgressBar.tsx
+│       │       ├── ChipSelect.tsx
+│       │       ├── ChipSelect.module.css
+│       │       ├── NavigationButtons.tsx
+│       │       └── NavigationButtons.module.css
+│       ├── screens/
+│       │   ├── VibePicker.tsx
+│       │   ├── TripBasics.tsx
+│       │   ├── Constraints.tsx
+│       │   ├── FineTune.tsx
+│       │   ├── Loading.tsx
+│       │   └── Itinerary.tsx
+│       ├── services/
+│       │   └── api.ts
+│       ├── utils/
+│       │   └── validation.ts
+│       ├── App.tsx
+│       ├── main.tsx
+│       └── index.css
+│
+├── backend/
+│   └── src/
+│       ├── agents/
+│       │   ├── vibeAgent.ts
+│       │   ├── budgetAgent.ts
+│       │   ├── logisticsAgent.ts
+│       │   ├── diversityAgent.ts
+│       │   └── reconcilerAgent.ts
+│       ├── graph/
+│       │   └── plannerGraph.ts
+│       ├── lib/
+│       │   ├── prisma.ts
+│       │   └── groq.ts
+│       ├── middleware/
+│       │   ├── validate.ts
+│       │   └── errorHandler.ts
+│       ├── routes/
+│       │   ├── cities.ts
+│       │   ├── attractions.ts
+│       │   └── itinerary.ts        # pending
+│       └── index.ts                # pending
+│
+├── CONTEXT.md
+├── .gitignore
+└── README.md

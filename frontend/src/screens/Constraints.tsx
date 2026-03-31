@@ -6,7 +6,7 @@ import type {
   Transport,
   UserProfile,
   WakeUpStyle,
-} from '../types/userProfile';
+} from '@vibetrip/shared/types/userProfile';
 import styles from './Constraints.module.css';
 
 interface ConstraintsProps {

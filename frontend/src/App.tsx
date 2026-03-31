@@ -8,6 +8,7 @@ import Constraints from './screens/Constraints';
 import FineTune from './screens/FineTune';
 import Loading from './screens/Loading';
 import Itinerary from './screens/Itinerary';
+import { generateItinerary } from './services/api';
 
 const TOTAL_SCREENS = 4;
 
@@ -23,7 +24,7 @@ export default function App() {
   const goBack = () => setCurrentScreen(prev => prev - 1);
 
   const handleSubmit = () => {
-    console.log('Submitting profile:', userProfile);
+    generateItinerary(userProfile);
     setCurrentScreen(5); // loading screen
   };
 

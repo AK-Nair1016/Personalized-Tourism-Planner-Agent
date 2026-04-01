@@ -1,9 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import { errorHandler } from './middleware/errorHandler';
-import citiesRouter from './routes/cities';
-import attractionsRouter from './routes/attractions';
-import itineraryRouter from './routes/itinerary';
+import citiesRouter from './routes/cities.Routes';
+import attractionsRouter from './routes/attractions.Routes';
+import itineraryRouter from './routes/itinerary.Routes';
 
 const app = express();
 const PORT = process.env.PORT || 3000;

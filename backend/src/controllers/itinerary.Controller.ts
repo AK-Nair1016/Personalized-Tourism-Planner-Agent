@@ -1,11 +1,7 @@
-import { Router } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import { runPlannerGraph } from '../graph/plannerGraph';
-import { vaildateItineraryInput } from '../middleware/validate';
-// import { prisma } from '../lib/prisma';
 
-const router = Router();
-
-router.post('/generate', vaildateItineraryInput, async (req, res, next) => {
+export async function generateItinerary(req: Request, res: Response, next: NextFunction) {
   try {
     const userProfile = req.body;
     const itinerary = await runPlannerGraph(userProfile);
@@ -13,9 +9,9 @@ router.post('/generate', vaildateItineraryInput, async (req, res, next) => {
   } catch (err) {
     next(err);
   }
-});
+}
 
-router.post('/replan', async (req, res, next) => {
+export async function replanItinerary(req: Request, res: Response, next: NextFunction) {
   try {
     const { itinerary_id, disruption } = req.body;
 
@@ -29,6 +25,4 @@ router.post('/replan', async (req, res, next) => {
   } catch (err) {
     next(err);
   }
-});
-
-export default router;
+}

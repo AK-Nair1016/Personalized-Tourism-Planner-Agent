@@ -55,3 +55,5 @@ export function vaildateItineraryInput(
     next();
     
 }
+
+export const validateItineraryInput = vaildateItineraryInput;

@@ -1,9 +1,7 @@
-import { Router } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../lib/prisma';
 
-const router = Router();
-
-router.get('/', async (req, res, next) => {
+export async function getCities(req: Request, res: Response, next: NextFunction) {
   try {
     const cities = await prisma.city.findMany({
       include: { country: true },
@@ -12,6 +10,4 @@ router.get('/', async (req, res, next) => {
   } catch (err) {
     next(err);
   }
-});
-
-export default router;
+}

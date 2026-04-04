@@ -1,6 +1,15 @@
-import groq from '../lib/groq';
+import groq, { GROQ_MODEL } from '../lib/groq';
 import type { UserProfile } from '@vibetrip/shared/types/userProfile';
+import {
+  compactAttractionsForPrompt,
+  compactUserProfileForPrompt,
+} from './promptData';
+
 export async function vibeAgent(userProfile: UserProfile, attractions: any[]) {
+  const maxAttractions = Number(process.env.AGENT_ATTRACTION_LIMIT ?? 30);
+  const compactProfile = compactUserProfileForPrompt(userProfile);
+  const compactAttractions = compactAttractionsForPrompt(attractions, maxAttractions);
+
   const prompt = `
 You are a travel personality expert. Your only job is to look at a traveller's vibe profile and score each attraction by how well it matches their personality.
 
@@ -13,10 +22,10 @@ Vibe definitions:
 - budget_explorer: free/cheap spots, local transport, hidden gems
 
 User profile:
-${JSON.stringify(userProfile, null, 2)}
+${JSON.stringify(compactProfile)}
 
-Attractions:
-${JSON.stringify(attractions, null, 2)}
+Attractions (trimmed for token safety):
+${JSON.stringify(compactAttractions)}
 
 Return a JSON array. Each item must have:
 {
@@ -29,9 +38,10 @@ Return ONLY the JSON array, no prose.
 `;
 
   const response = await groq.chat.completions.create({
-    model: 'llama3-8b-8192',
+    model: GROQ_MODEL,
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.3,
+    max_completion_tokens: 900,
   });
 
   const text = response.choices[0].message.content || '[]';

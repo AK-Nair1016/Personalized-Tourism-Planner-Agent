@@ -1,5 +1,12 @@
-import groq from '../lib/groq';
+import groq, { GROQ_MODEL } from '../lib/groq';
 import { UserProfile } from '@vibetrip/shared/types/userProfile';
+import {
+  compactAttractionsForPrompt,
+  compactDiversityOutputForPrompt,
+  compactLogisticsOutputForPrompt,
+  compactUserProfileForPrompt,
+  compactVibeOutputForPrompt,
+} from './promptData';
 
 export async function reconcilerAgent(
   userProfile: UserProfile,
@@ -9,6 +16,13 @@ export async function reconcilerAgent(
   diversityOutput: any,
   attractions: any[]
 ) {
+  const maxAttractions = Number(process.env.AGENT_ATTRACTION_LIMIT ?? 30);
+  const compactProfile = compactUserProfileForPrompt(userProfile);
+  const compactVibe = compactVibeOutputForPrompt(vibeOutput, maxAttractions);
+  const compactLogistics = compactLogisticsOutputForPrompt(logisticsOutput);
+  const compactDiversity = compactDiversityOutputForPrompt(diversityOutput);
+  const compactAttractions = compactAttractionsForPrompt(attractions, maxAttractions);
+
   const prompt = `
 You are the final travel planner. You receive four specialist reports and must build the best possible itinerary from them.
 
@@ -22,22 +36,22 @@ Conflict resolution rules (in priority order):
 For each activity, write a "why this fits your vibe" note of exactly 1-2 sentences in a warm, personal tone.
 
 User profile:
-${JSON.stringify(userProfile, null, 2)}
+${JSON.stringify(compactProfile)}
 
 Vibe agent output:
-${JSON.stringify(vibeOutput, null, 2)}
+${JSON.stringify(compactVibe)}
 
 Budget agent output:
-${JSON.stringify(budgetOutput, null, 2)}
+${JSON.stringify(budgetOutput)}
 
 Logistics agent output:
-${JSON.stringify(logisticsOutput, null, 2)}
+${JSON.stringify(compactLogistics)}
 
 Diversity agent output:
-${JSON.stringify(diversityOutput, null, 2)}
+${JSON.stringify(compactDiversity)}
 
 Attractions:
-${JSON.stringify(attractions, null, 2)}
+${JSON.stringify(compactAttractions)}
 
 Return a JSON object with this exact structure:
 {
@@ -70,9 +84,10 @@ Return ONLY the JSON object, no prose.
 `;
 
   const response = await groq.chat.completions.create({
-    model: 'llama3-8b-8192',
+    model: GROQ_MODEL,
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.3,
+    max_completion_tokens: 1200,
   });
 
   const text = response.choices[0].message.content || '{}';

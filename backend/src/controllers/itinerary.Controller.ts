@@ -1,13 +1,35 @@
 import { Request, Response, NextFunction } from 'express';
 import { runPlannerGraph } from '../graph/plannerGraph';
+import crypto from 'crypto';
+
+type RequestError = Error & {
+  requestId?: string;
+};
 
 export async function generateItinerary(req: Request, res: Response, next: NextFunction) {
+  const requestId = req.header('x-request-id') || crypto.randomUUID();
+  const startedAt = Date.now();
+  res.setHeader('x-request-id', requestId);
+
+  console.log(
+    `[itinerary.generate] start requestId=${requestId} city=${req.body?.city ?? 'unknown'}`
+  );
+
   try {
     const userProfile = req.body;
-    const itinerary = await runPlannerGraph(userProfile);
+    const itinerary = await runPlannerGraph(userProfile, { requestId });
+    console.log(
+      `[itinerary.generate] success requestId=${requestId} durationMs=${Date.now() - startedAt}`
+    );
     res.json(itinerary);
   } catch (err) {
-    next(err);
+    const error = err as RequestError;
+    error.requestId = requestId;
+
+    console.error(
+      `[itinerary.generate] failed requestId=${requestId} durationMs=${Date.now() - startedAt}`
+    );
+    next(error);
   }
 }
 

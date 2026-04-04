@@ -1,4 +1,4 @@
-import groq from '../lib/groq';
+import groq, { GROQ_MODEL } from '../lib/groq';
 import type { UserProfile } from '@vibetrip/shared/types/userProfile';
 
 export async function logisticsAgent(userProfile: UserProfile, vibeAgentOutput: any[], attractions: any[]) {
@@ -58,7 +58,7 @@ Return ONLY the JSON array, no prose.
 `;
 
   const response = await groq.chat.completions.create({
-    model: 'llama3-8b-8192',
+    model: GROQ_MODEL,
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.3,
   });
@@ -66,8 +66,8 @@ Return ONLY the JSON array, no prose.
   const text = response.choices[0].message.content || '[]';
 
   try {
-    return JSON.parse(text);
-  } catch {
+    const clean = text.replace(/```json|```/g, '').trim();
+    return JSON.parse(clean);  } catch {
     console.error('logisticsAgent parse error:', text);
     return [];
   }

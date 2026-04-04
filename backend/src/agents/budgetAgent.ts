@@ -1,5 +1,9 @@
-import groq from '../lib/groq';
+import groq, { GROQ_MODEL } from '../lib/groq';
 import type { UserProfile } from '@vibetrip/shared/types/userProfile';
+import {
+  compactUserProfileForPrompt,
+  compactVibeOutputForPrompt,
+} from './promptData';
 
 export async function budgetAgent(userProfile: UserProfile, vibeAgentOutput: any[]) {
   const arrivalDate = new Date(userProfile.arrivalDate!);
@@ -7,6 +11,8 @@ export async function budgetAgent(userProfile: UserProfile, vibeAgentOutput: any
   const effectiveDays = Math.ceil(
     (departureDate.getTime() - arrivalDate.getTime()) / (1000 * 60 * 60 * 24)
   );
+  const compactProfile = compactUserProfileForPrompt(userProfile);
+  const compactVibeOutput = compactVibeOutputForPrompt(vibeAgentOutput, 60);
 
   const prompt = `
 You are a travel budget optimizer. Your only job is to make sure the traveller's money is well distributed across their trip.
@@ -18,12 +24,12 @@ Rules:
 - Flag any attraction where avg_cost exceeds 20% of the daily budget
 
 User profile:
-${JSON.stringify(userProfile, null, 2)}
+${JSON.stringify(compactProfile)}
 
 Effective days: ${effectiveDays}
 
 Vibe agent output:
-${JSON.stringify(vibeAgentOutput, null, 2)}
+${JSON.stringify(compactVibeOutput)}
 
 Return a JSON object with this structure:
 {
@@ -47,15 +53,17 @@ Return ONLY the JSON object, no prose.
 `;
 
   const response = await groq.chat.completions.create({
-    model: 'llama3-8b-8192',
+    model: GROQ_MODEL,
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.3,
+    max_completion_tokens: 800,
   });
 
   const text = response.choices[0].message.content || '{}';
 
   try {
-    return JSON.parse(text);
+    const clean = text.replace(/```json|```/g, '').trim();
+      return JSON.parse(clean);
   } catch {
     console.error('budgetAgent parse error:', text);
     return {};

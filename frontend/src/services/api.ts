@@ -1,21 +1,43 @@
 import { UserProfile } from '@vibetrip/shared/types/userProfile';
 
+const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+
 export async function generateItinerary(userProfile: UserProfile) {
-  // Day 5 - wire real API call here
-  console.log('generateItinerary called with:', userProfile);
+  const response = await fetch(`${BASE_URL}/api/itinerary/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(userProfile),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to generate itinerary: ${response.status}`);
+  }
+
+  return response.json();
 }
 
 export async function replanItinerary(itineraryId: string, disruption: object) {
-  // Day 6 - wire real replan call here
-  console.log('replanItinerary called with:', itineraryId, disruption);
+  const response = await fetch(`${BASE_URL}/api/itinerary/replan`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ itinerary_id: itineraryId, disruption }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to replan itinerary: ${response.status}`);
+  }
+
+  return response.json();
 }
 
 export async function getCities() {
-  // Day 3 - wire real fetch here
-  console.log('getCities called');
+  const response = await fetch(`${BASE_URL}/api/cities`);
+  if (!response.ok) throw new Error('Failed to fetch cities');
+  return response.json();
 }
 
 export async function getAttractions(cityId: string) {
-  // Day 3 - wire real fetch here
-  console.log('getAttractions called with:', cityId);
+  const response = await fetch(`${BASE_URL}/api/attractions?cityId=${cityId}`);
+  if (!response.ok) throw new Error('Failed to fetch attractions');
+  return response.json();
 }

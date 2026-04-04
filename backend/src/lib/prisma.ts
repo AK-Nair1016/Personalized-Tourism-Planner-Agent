@@ -1,9 +1,30 @@
-import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
+import { loadEnv } from './env';
 
-dotenv.config({ quiet: true });
+loadEnv();
 
-const databaseUrl = process.env.DATABASE_URL ?? '';
+function normalizeDatabaseUrl(url: string) {
+  if (!url) return url;
+
+  try {
+    const parsed = new URL(url);
+    const sslmode = parsed.searchParams.get('sslmode');
+    const hasLibpqCompat = parsed.searchParams.has('uselibpqcompat');
+    const deprecatedSslModes = new Set(['prefer', 'require', 'verify-ca']);
+
+    if (sslmode && deprecatedSslModes.has(sslmode) && !hasLibpqCompat) {
+      // Keeps pg v8 behavior explicit and suppresses deprecation warning noise.
+      parsed.searchParams.set('sslmode', 'verify-full');
+      return parsed.toString();
+    }
+  } catch {
+    // Keep original URL when it cannot be parsed as a standard URL string.
+  }
+
+  return url;
+}
+
+const databaseUrl = normalizeDatabaseUrl(process.env.DATABASE_URL ?? '');
 
 if (!databaseUrl) {
   throw new Error(

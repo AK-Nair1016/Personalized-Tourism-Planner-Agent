@@ -3,6 +3,7 @@ import styles from './Itinerary.module.css';
 
 interface ItineraryProps {
   userProfile: UserProfile;
+  itinerary: unknown;
 }
 
 const formatLabel = (value: string) =>
@@ -10,7 +11,7 @@ const formatLabel = (value: string) =>
     .replace(/_/g, ' ')
     .replace(/\b\w/g, letter => letter.toUpperCase());
 
-export default function Itinerary({ userProfile }: ItineraryProps) {
+export default function Itinerary({ userProfile, itinerary }: ItineraryProps) {
   const summaryItems = [
     { label: 'City', value: userProfile.city ?? 'Not selected yet' },
     {
@@ -83,6 +84,15 @@ export default function Itinerary({ userProfile }: ItineraryProps) {
               </p>
             </article>
           </div>
+        </section>
+
+        <section className={styles.section}>
+          <h3 className={styles.sectionTitle}>Raw itinerary JSON</h3>
+          <pre className={styles.jsonBlock}>
+            {itinerary
+              ? JSON.stringify(itinerary, null, 2)
+              : 'No itinerary payload received.'}
+          </pre>
         </section>
       </div>
     </section>

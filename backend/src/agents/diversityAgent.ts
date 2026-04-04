@@ -1,7 +1,17 @@
-import groq from '../lib/groq';
+import groq, { GROQ_MODEL } from '../lib/groq';
 import { UserProfile } from '@vibetrip/shared/types/userProfile';
+import {
+  compactAttractionsForPrompt,
+  compactLogisticsOutputForPrompt,
+  compactUserProfileForPrompt,
+} from './promptData';
 
 export async function diversityAgent(userProfile: UserProfile, logisticsAgentOutput: any[], attractions: any[]) {
+  const maxAttractions = Number(process.env.AGENT_ATTRACTION_LIMIT ?? 30);
+  const compactProfile = compactUserProfileForPrompt(userProfile);
+  const compactLogisticsOutput = compactLogisticsOutputForPrompt(logisticsAgentOutput);
+  const compactAttractions = compactAttractionsForPrompt(attractions, maxAttractions);
+
   const prompt = `
 You are a travel experience curator. Your only job is to make sure the trip is not repetitive.
 
@@ -13,13 +23,13 @@ Rules:
 - If the plan is already diverse, return an empty suggestions array
 
 User profile:
-${JSON.stringify(userProfile, null, 2)}
+${JSON.stringify(compactProfile)}
 
 Logistics agent output:
-${JSON.stringify(logisticsAgentOutput, null, 2)}
+${JSON.stringify(compactLogisticsOutput)}
 
 Attractions with categories:
-${JSON.stringify(attractions, null, 2)}
+${JSON.stringify(compactAttractions)}
 
 Return a JSON object with this structure:
 {
@@ -41,16 +51,17 @@ Return ONLY the JSON object, no prose.
 `;
 
   const response = await groq.chat.completions.create({
-    model: 'llama3-8b-8192',
+    model: GROQ_MODEL,
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.3,
+    max_completion_tokens: 800,
   });
 
   const text = response.choices[0].message.content || '{}';
 
   try {
-    return JSON.parse(text);
-  } catch {
+    const clean = text.replace(/```json|```/g, '').trim();
+      return JSON.parse(clean);  } catch {
     console.error('diversityAgent parse error:', text);
     return { diverse: true, flagged_days: [] };
   }

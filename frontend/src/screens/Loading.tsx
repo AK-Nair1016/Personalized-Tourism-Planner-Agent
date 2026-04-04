@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import styles from './Loading.module.css';
 
 interface LoadingProps {
-  onDone: () => void;
+  onDone?: () => void;
 }
 
 const AGENTS = [
@@ -15,6 +15,8 @@ const AGENTS = [
 
 export default function Loading({ onDone }: LoadingProps) {
   useEffect(() => {
+    if (!onDone) return;
+
     const timeoutId = window.setTimeout(onDone, 2800);
 
     return () => window.clearTimeout(timeoutId);

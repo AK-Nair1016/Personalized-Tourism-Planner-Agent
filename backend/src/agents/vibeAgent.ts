@@ -47,7 +47,11 @@ Return ONLY the JSON array, no prose.
   const text = response.choices[0].message.content || '[]';
 
   try {
-    return JSON.parse(text);
+    const clean = text
+      .replace(/```[\w]*\n?/g, '')
+      .replace(/```/g, '')
+      .trim();
+    return JSON.parse(clean);
   } catch {
     console.error('vibeAgent parse error:', text);
     return [];

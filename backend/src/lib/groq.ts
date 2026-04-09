@@ -11,7 +11,7 @@ if (!GROQ_API_KEY) {
   );
 }
 
-export const GROQ_MODEL = process.env.GROQ_MODEL?.trim() || 'llama-3.1-8b-instant';
+export const GROQ_MODEL = process.env.GROQ_MODEL?.trim() || 'llama-3.3-70b-versatile';
 
 export const groq = new Groq({
   apiKey: GROQ_API_KEY,

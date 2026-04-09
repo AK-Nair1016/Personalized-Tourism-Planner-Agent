@@ -62,8 +62,11 @@ Return ONLY the JSON object, no prose.
   const text = response.choices[0].message.content || '{}';
 
   try {
-    const clean = text.replace(/```json|```/g, '').trim();
-      return JSON.parse(clean);
+    const clean = text
+      .replace(/```[\w]*\n?/g, '')
+      .replace(/```/g, '')
+      .trim();
+    return JSON.parse(clean);
   } catch {
     console.error('budgetAgent parse error:', text);
     return {};

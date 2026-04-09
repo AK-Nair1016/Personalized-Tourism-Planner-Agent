@@ -90,6 +90,17 @@ function parsePositiveInt(value: string | undefined, fallback: number) {
   return Math.floor(parsed);
 }
 
+type PlannerItineraryLike = {
+  total_cost_estimate?: number;
+  days: unknown[];
+};
+
+function isValidPlannerItinerary(value: unknown): value is PlannerItineraryLike {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return Array.isArray(candidate.days);
+}
+
 function isTokenLimitError(error: unknown) {
   const baseError =
     error instanceof PipelineStageError
@@ -299,6 +310,11 @@ export async function runPlannerGraph(
       workingAttractions
     )
   );
+
+  if (!isValidPlannerItinerary(itinerary)) {
+    const invalidPayloadError = new Error('Reconciler returned invalid itinerary payload');
+    throw new PipelineStageError('agent_reconciler', invalidPayloadError, context.requestId);
+  }
 
   await runStage(context, 'db_store_itinerary', async () =>
     prisma.itinerary.create({

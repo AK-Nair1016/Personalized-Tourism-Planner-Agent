@@ -60,8 +60,12 @@ Return ONLY the JSON object, no prose.
   const text = response.choices[0].message.content || '{}';
 
   try {
-    const clean = text.replace(/```json|```/g, '').trim();
-      return JSON.parse(clean);  } catch {
+    const clean = text
+      .replace(/```[\w]*\n?/g, '')
+      .replace(/```/g, '')
+      .trim();
+    return JSON.parse(clean);
+  } catch {
     console.error('diversityAgent parse error:', text);
     return { diverse: true, flagged_days: [] };
   }

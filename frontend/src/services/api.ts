@@ -1,8 +1,21 @@
-import { UserProfile } from '@vibetrip/shared/types/userProfile';
+import type { UserProfile } from '@vibetrip/shared/types/userProfile';
+import type { Itinerary as ItineraryData } from '@vibetrip/shared/types/Itinerary';
 
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
-export async function generateItinerary(userProfile: UserProfile) {
+function isValidItineraryPayload(value: unknown): value is ItineraryData {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+
+  return (
+    typeof candidate.city === 'string' &&
+    typeof candidate.currency === 'string' &&
+    typeof candidate.total_cost_estimate === 'number' &&
+    Array.isArray(candidate.days)
+  );
+}
+
+export async function generateItinerary(userProfile: UserProfile): Promise<ItineraryData> {
   const response = await fetch(`${BASE_URL}/api/itinerary/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -13,7 +26,19 @@ export async function generateItinerary(userProfile: UserProfile) {
     throw new Error(`Failed to generate itinerary: ${response.status}`);
   }
 
-  return response.json();
+  const payload = (await response.json()) as unknown;
+  const maybeWrapped =
+    typeof payload === 'object' &&
+    payload !== null &&
+    'itinerary' in payload
+      ? (payload as { itinerary: unknown }).itinerary
+      : payload;
+
+  if (!isValidItineraryPayload(maybeWrapped)) {
+    throw new Error('Backend returned invalid itinerary payload');
+  }
+
+  return maybeWrapped;
 }
 
 export async function replanItinerary(itineraryId: string, disruption: object) {

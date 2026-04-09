@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { UserProfile, defaultUserProfile } from '@vibetrip/shared/types/userProfile';
+import { defaultUserProfile } from '@vibetrip/shared/types/userProfile';
+import type { UserProfile } from '@vibetrip/shared/types/userProfile';
+import type { Itinerary as ItineraryData } from '@vibetrip/shared/types/Itinerary';
 import { generateItinerary } from './services/api';
 import ProgressBar from './components/ui/ProgressBar';
 import VibePicker from './screens/VibePicker';
@@ -14,7 +16,7 @@ const TOTAL_SCREENS = 4;
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState(1);
   const [userProfile, setUserProfile] = useState<UserProfile>(defaultUserProfile);
-  const [itinerary, setItinerary] = useState<any>(null);
+  const [itinerary, setItinerary] = useState<ItineraryData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const updateProfile = (fields: Partial<UserProfile>) => {
@@ -31,8 +33,8 @@ export default function App() {
       const result = await generateItinerary(userProfile);
       setItinerary(result);
       setCurrentScreen(6); // show itinerary
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to generate itinerary');
       setCurrentScreen(4); // go back to FineTune on error
     }
   };
@@ -54,7 +56,9 @@ export default function App() {
         </>
       )}
       {currentScreen === 5 && <Loading />}
-      {currentScreen === 6 && <Itinerary userProfile={userProfile} itinerary={itinerary} />}
+      {currentScreen === 6 && itinerary && (
+        <Itinerary userProfile={userProfile} itinerary={itinerary} />
+      )}
     </div>
   );
 }

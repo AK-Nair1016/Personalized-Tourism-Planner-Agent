@@ -15,12 +15,24 @@ interface ItineraryProps {
 export default function Itinerary({ userProfile, itinerary }: ItineraryProps) {
   const [activeDay, setActiveDay] = useState(1);
   const safeDays = Array.isArray(itinerary?.days) ? itinerary.days : [];
+  const fxInrToLocal =
+    typeof itinerary.fx_inr_to_local === 'number' && Number.isFinite(itinerary.fx_inr_to_local)
+      ? itinerary.fx_inr_to_local
+      : 1;
+  const budgetInProfileCurrency = userProfile.budget ?? 0;
+  const totalBudgetForDisplay =
+    itinerary.currency === userProfile.currency
+      ? budgetInProfileCurrency
+      : itinerary.pricing_basis_currency === userProfile.currency
+        ? budgetInProfileCurrency * fxInrToLocal
+        : budgetInProfileCurrency;
 
   if (safeDays.length === 0) {
     return <div>No itinerary data available.</div>;
   }
 
   const currentDay = safeDays.find((d) => d.day === activeDay) ?? safeDays[0];
+  const dailyCapForDisplay = safeDays.length > 0 ? totalBudgetForDisplay / safeDays.length : 0;
 
   return (
     <section className={styles.screen}>
@@ -32,6 +44,11 @@ export default function Itinerary({ userProfile, itinerary }: ItineraryProps) {
           <p className={styles.subtitle}>
             {safeDays.length} days · {itinerary.currency} {itinerary.total_cost_estimate.toLocaleString()} est.
           </p>
+          {typeof itinerary.total_cost_estimate_inr === 'number' && itinerary.currency !== 'INR' && (
+            <p className={styles.subtitle}>
+              INR {itinerary.total_cost_estimate_inr.toLocaleString()} planning basis
+            </p>
+          )}
         </div>
 
         {/* Day tabs */}
@@ -66,9 +83,9 @@ export default function Itinerary({ userProfile, itinerary }: ItineraryProps) {
             {/* Cost summary */}
               <CostSummary
                 dailySpend={currentDay.day_cost_estimate}
-                dailyCap={userProfile.budget ? userProfile.budget / safeDays.length : 0}
+                dailyCap={dailyCapForDisplay}
                 totalSpend={itinerary.total_cost_estimate}
-                totalBudget={userProfile.budget ?? 0}
+                totalBudget={totalBudgetForDisplay}
                 currency={itinerary.currency}
             />
           </>

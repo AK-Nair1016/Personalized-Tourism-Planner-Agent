@@ -7,6 +7,9 @@ interface SlotCardProps {
 }
 
 export default function SlotCard({ slot, currency }: SlotCardProps) {
+  const showInrReference =
+    typeof slot.estimated_cost_inr === 'number' && currency !== 'INR';
+
   return (
     <div className={styles.card}>
       <div className={styles.header}>
@@ -18,11 +21,18 @@ export default function SlotCard({ slot, currency }: SlotCardProps) {
       <p className={styles.vibeNote}>{slot.vibe_note}</p>
 
       <div className={styles.footer}>
-        <span className={styles.cost}>
-          {slot.estimated_cost === 0
-            ? 'Free'
-            : `${currency} ${slot.estimated_cost.toLocaleString()}`}
-        </span>
+        <div>
+          <span className={styles.cost}>
+            {slot.estimated_cost === 0
+              ? 'Free'
+              : `${currency} ${slot.estimated_cost.toLocaleString()}`}
+          </span>
+          {showInrReference && (
+            <div className={styles.costMeta}>
+              INR {slot.estimated_cost_inr?.toLocaleString()}
+            </div>
+          )}
+        </div>
         {slot.duration_minutes && (
           <span className={styles.duration}>{slot.duration_minutes} min</span>
         )}

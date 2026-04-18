@@ -9,8 +9,8 @@ interface CostSummaryProps {
 }
 
 export default function CostSummary({ dailySpend, dailyCap, totalSpend, totalBudget, currency }: CostSummaryProps) {
-  const dailyPercent = Math.min((dailySpend / dailyCap) * 100, 100);
-  const totalPercent = Math.min((totalSpend / totalBudget) * 100, 100);
+  const dailyPercent = dailyCap > 0 ? Math.min((dailySpend / dailyCap) * 100, 100) : 0;
+  const totalPercent = totalBudget > 0 ? Math.min((totalSpend / totalBudget) * 100, 100) : 0;
 
   return (
     <div className={styles.container}>

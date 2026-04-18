@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../lib/prisma';
+import { convertInrToLocal, getCurrencySymbol } from '../utils/currency';
 
 export async function getAttractions(req: Request, res: Response, next: NextFunction) {
   try {
@@ -15,10 +16,27 @@ export async function getAttractions(req: Request, res: Response, next: NextFunc
         ...(category && { category: { name: String(category) } }),
         ...(maxCost && { avgCost: { lte: Number(maxCost) } }),
       },
-      include: { category: true },
+      include: {
+        category: true,
+        city: { include: { country: true } },
+      },
     });
 
-    res.json(attractions);
+    const normalized = attractions.map((attraction) => {
+      const localCurrencyCode = attraction.city.country.currencyCode;
+      const localCurrencySymbol =
+        attraction.city.country.currencySymbol || getCurrencySymbol(localCurrencyCode);
+
+      return {
+        ...attraction,
+        avgCostInr: attraction.avgCost,
+        avgCostLocal: convertInrToLocal(attraction.avgCost, localCurrencyCode),
+        localCurrencyCode,
+        localCurrencySymbol,
+      };
+    });
+
+    res.json(normalized);
   } catch (err) {
     next(err);
   }

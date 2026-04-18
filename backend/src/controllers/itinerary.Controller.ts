@@ -1,12 +1,25 @@
 import { Request, Response, NextFunction } from 'express';
 import { runPlannerGraph } from '../graph/plannerGraph';
 import crypto from 'crypto';
+import { prisma } from '../lib/prisma';
+import {
+  convertInrToLocal,
+  getCurrencySymbol,
+  getInrToLocalRate,
+} from '../utils/currency';
 
 type RequestError = Error & {
   requestId?: string;
 };
 
 type ItinerarySlotLike = {
+  slot?: unknown;
+  attraction_id?: unknown;
+  attraction_name?: unknown;
+  category?: unknown;
+  duration_minutes?: unknown;
+  coordinates?: unknown;
+  vibe_note?: unknown;
   estimated_cost?: unknown;
 };
 
@@ -78,6 +91,75 @@ function buildCostAudit(itinerary: ItineraryLike) {
   return { dayBreakdown, totals };
 }
 
+function localizeItineraryCosts(
+  itinerary: ItineraryLike,
+  localCurrencyCode: string,
+  localCurrencySymbol: string
+) {
+  const daysRaw = Array.isArray(itinerary.days) ? (itinerary.days as ItineraryDayLike[]) : [];
+
+  const localizedDays = daysRaw.map((day, dayIndex) => {
+    const slotsRaw = Array.isArray(day.slots) ? (day.slots as ItinerarySlotLike[]) : [];
+
+    const localizedSlots = slotsRaw.map((slot, slotIndex) => {
+      const estimatedCostInr = round2(asNumber(slot.estimated_cost));
+      const estimatedCostLocal = convertInrToLocal(estimatedCostInr, localCurrencyCode);
+
+      return {
+        slot: asString(slot.slot, slotIndex === 0 ? 'morning' : slotIndex === 1 ? 'afternoon' : 'evening'),
+        attraction_id: asString(slot.attraction_id, `slot-${dayIndex + 1}-${slotIndex + 1}`),
+        attraction_name: asString(slot.attraction_name, `Activity ${slotIndex + 1}`),
+        category: asString(slot.category, 'general'),
+        duration_minutes: asNumber(slot.duration_minutes),
+        coordinates:
+          typeof slot.coordinates === 'object' && slot.coordinates !== null
+            ? slot.coordinates
+            : { lat: 0, lng: 0 },
+        vibe_note: asString(slot.vibe_note, 'A great match for your travel vibe.'),
+        estimated_cost_inr: estimatedCostInr,
+        estimated_cost_local: estimatedCostLocal,
+        estimated_cost: estimatedCostLocal,
+      };
+    });
+
+    const dayCostEstimateInr = round2(
+      localizedSlots.reduce((sum, slot) => sum + asNumber(slot.estimated_cost_inr), 0)
+    );
+    const dayCostEstimateLocal = round2(
+      localizedSlots.reduce((sum, slot) => sum + asNumber(slot.estimated_cost_local), 0)
+    );
+
+    return {
+      day: asNumber(day.day) || dayIndex + 1,
+      date_label: asString(day.date_label, `Day ${dayIndex + 1}`),
+      cluster_area: asString(day.cluster_area, '-'),
+      slots: localizedSlots,
+      day_cost_estimate_inr: dayCostEstimateInr,
+      day_cost_estimate_local: dayCostEstimateLocal,
+      day_cost_estimate: dayCostEstimateLocal,
+    };
+  });
+
+  const totalCostEstimateInr = round2(
+    localizedDays.reduce((sum, day) => sum + asNumber(day.day_cost_estimate_inr), 0)
+  );
+  const totalCostEstimateLocal = round2(
+    localizedDays.reduce((sum, day) => sum + asNumber(day.day_cost_estimate_local), 0)
+  );
+
+  return {
+    city: asString(itinerary.city, 'Trip'),
+    currency: localCurrencyCode,
+    currency_symbol: localCurrencySymbol,
+    pricing_basis_currency: 'INR',
+    fx_inr_to_local: getInrToLocalRate(localCurrencyCode),
+    total_cost_estimate_inr: totalCostEstimateInr,
+    total_cost_estimate_local: totalCostEstimateLocal,
+    total_cost_estimate: totalCostEstimateLocal,
+    days: localizedDays,
+  };
+}
+
 export async function generateItinerary(req: Request, res: Response, next: NextFunction) {
   const requestId = req.header('x-request-id') || crypto.randomUUID();
   const startedAt = Date.now();
@@ -91,18 +173,35 @@ export async function generateItinerary(req: Request, res: Response, next: NextF
     const userProfile = req.body;
     const { itinerary, tokensUsed, meta } = await runPlannerGraph(userProfile, { requestId });
     const costAudit = buildCostAudit(itinerary as ItineraryLike);
+    const cityForCurrency = await prisma.city.findFirst({
+      where: { name: String(userProfile?.city ?? (itinerary as ItineraryLike)?.city ?? '') },
+      include: { country: true },
+    });
+    const localCurrencyCode = cityForCurrency?.country?.currencyCode ?? 'INR';
+    const localCurrencySymbol =
+      cityForCurrency?.country?.currencySymbol ?? getCurrencySymbol(localCurrencyCode);
+    const localizedItinerary = localizeItineraryCosts(
+      itinerary as ItineraryLike,
+      localCurrencyCode,
+      localCurrencySymbol
+    );
 
     console.group(`[itinerary.generate] full itinerary requestId=${requestId}`);
     console.log(JSON.stringify(itinerary, null, 2));
     console.log('[itinerary.generate] cost audit (day-level)');
     console.table(costAudit.dayBreakdown);
     console.log('[itinerary.generate] cost audit (totals)', costAudit.totals);
+    console.log('[itinerary.generate] localized currency', {
+      currency: localizedItinerary.currency,
+      symbol: localizedItinerary.currency_symbol,
+      fxInrToLocal: localizedItinerary.fx_inr_to_local,
+    });
     console.groupEnd();
 
     console.log(
       `[itinerary.generate] success requestId=${requestId} durationMs=${Date.now() - startedAt}`
     );
-    res.json({ ...itinerary, tokensUsed, meta });
+    res.json({ ...localizedItinerary, tokensUsed, meta });
   } catch (err) {
     const error = err as RequestError;
     error.requestId = requestId;

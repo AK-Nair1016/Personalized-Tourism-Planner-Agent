@@ -1,4 +1,8 @@
 import { prisma } from '../lib/prisma';
+import {
+  ATTRACTION_PRICE_ANCHORS,
+  CITY_CATEGORY_PRICE_BANDS,
+} from '../../prisma/seed/seeders/pricingRules';
 
 type CheckResult = {
   name: string;
@@ -221,6 +225,69 @@ async function verifyCategories(results: CheckResult[]) {
   }
 }
 
+async function verifyPricingAccuracy(results: CheckResult[]) {
+  const attractions = await prisma.attraction.findMany({
+    include: {
+      city: { select: { name: true } },
+      category: { select: { name: true } },
+    },
+  });
+
+  const outliers: string[] = [];
+  for (const attraction of attractions) {
+    const cityBands = CITY_CATEGORY_PRICE_BANDS[attraction.city.name];
+    const band = cityBands?.[attraction.category.name];
+    if (!band) continue;
+
+    if (attraction.avgCost < band.min || attraction.avgCost > band.max) {
+      outliers.push(
+        `${attraction.city.name}/${attraction.category.name}/${attraction.name}=${attraction.avgCost} (expected ${band.min}-${band.max})`
+      );
+    }
+  }
+
+  addCheck(
+    results,
+    'No pricing outliers beyond city-category bands',
+    outliers.length === 0,
+    outliers.length === 0
+      ? `checked=${attractions.length}`
+      : `outliers=${outliers.length}; sample=${outliers.slice(0, 3).join(' | ')}`
+  );
+
+  const anchoredRows = await prisma.attraction.findMany({
+    where: { placeId: { in: Object.keys(ATTRACTION_PRICE_ANCHORS) } },
+    select: {
+      placeId: true,
+      name: true,
+      avgCost: true,
+    },
+  });
+  const anchoredByPlaceId = new Map(anchoredRows.map((row) => [row.placeId, row]));
+  const anchorMismatches: string[] = [];
+
+  for (const [placeId, expectedCost] of Object.entries(ATTRACTION_PRICE_ANCHORS)) {
+    const row = anchoredByPlaceId.get(placeId);
+    if (!row) {
+      anchorMismatches.push(`${placeId}=missing`);
+      continue;
+    }
+
+    if (Math.abs(row.avgCost - expectedCost) > 1) {
+      anchorMismatches.push(`${row.name}=${row.avgCost} expected=${expectedCost}`);
+    }
+  }
+
+  addCheck(
+    results,
+    'Anchored attractions use curated pricing',
+    anchorMismatches.length === 0,
+    anchorMismatches.length === 0
+      ? `anchorsChecked=${Object.keys(ATTRACTION_PRICE_ANCHORS).length}`
+      : `mismatches=${anchorMismatches.length}; sample=${anchorMismatches.slice(0, 3).join(' | ')}`
+  );
+}
+
 async function run() {
   const results: CheckResult[] = [];
   const expectedAttractionsTotal = parseExpectedAttractionsTotal();
@@ -270,6 +337,7 @@ async function run() {
   await verifyCountries(results);
   await verifyCities(results);
   await verifyCategories(results);
+  await verifyPricingAccuracy(results);
 
   const countsByCity = await prisma.attraction.groupBy({
     by: ['cityId'],

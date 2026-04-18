@@ -3,6 +3,7 @@ import { bangkokAttractions } from './bangkok.seed';
 import { goaAttractions } from './goa.seed';
 import { singaporeAttractions } from './singapore.seed';
 import { dubaiAttractions } from './dubai.seed';
+import { calibratePrice } from './pricingRules';
 
 type CountrySeed = {
   name: string;
@@ -142,6 +143,18 @@ async function upsertAttractions(
   categoryIdByName: Map<string, string>
 ) {
   const expectedPlaceIdsByCity = new Map<string, string[]>();
+  const sourceStats = { anchor: 0, seed: 0 };
+  const clampAdjustments: Array<{
+    cityName: string;
+    attractionName: string;
+    categoryName: string;
+    placeId: string;
+    originalCost: number;
+    finalCost: number;
+    bandMin: number | null;
+    bandMax: number | null;
+    source: 'anchor' | 'seed';
+  }> = [];
 
   for (const [cityName, attractions] of Object.entries(DESTINATION_ATTRACTIONS)) {
     const cityId = cityIdByName.get(cityName);
@@ -157,6 +170,26 @@ async function upsertAttractions(
       if (!categoryId) {
         throw new Error(`Missing category id for ${attraction.category}`);
       }
+      const pricing = calibratePrice({
+        cityName,
+        categoryName: attraction.category,
+        placeId: attraction.placeId,
+        proposedCost: attraction.avgCost,
+      });
+      sourceStats[pricing.source] += 1;
+      if (pricing.clamped || pricing.finalCost !== attraction.avgCost) {
+        clampAdjustments.push({
+          cityName,
+          attractionName: attraction.name,
+          categoryName: attraction.category,
+          placeId: attraction.placeId,
+          originalCost: attraction.avgCost,
+          finalCost: pricing.finalCost,
+          bandMin: pricing.bandMin,
+          bandMax: pricing.bandMax,
+          source: pricing.source,
+        });
+      }
 
       await prisma.attraction.upsert({
         where: { placeId: attraction.placeId },
@@ -165,7 +198,7 @@ async function upsertAttractions(
           categoryId,
           name: attraction.name,
           description: attraction.description,
-          avgCost: attraction.avgCost,
+          avgCost: pricing.finalCost,
           avgDurationMinutes: attraction.avgDurationMinutes,
           latitude: attraction.latitude,
           longitude: attraction.longitude,
@@ -183,7 +216,7 @@ async function upsertAttractions(
           categoryId,
           name: attraction.name,
           description: attraction.description,
-          avgCost: attraction.avgCost,
+          avgCost: pricing.finalCost,
           avgDurationMinutes: attraction.avgDurationMinutes,
           latitude: attraction.latitude,
           longitude: attraction.longitude,
@@ -208,6 +241,23 @@ async function upsertAttractions(
         },
       },
     });
+  }
+
+  console.log(
+    `Pricing source usage: anchor=${sourceStats.anchor}, seed=${sourceStats.seed}`
+  );
+  if (clampAdjustments.length > 0) {
+    console.log(`Pricing adjustments applied: ${clampAdjustments.length}`);
+    for (const adjustment of clampAdjustments) {
+      const bandLabel =
+        adjustment.bandMin === null || adjustment.bandMax === null
+          ? 'band=n/a'
+          : `band=[${adjustment.bandMin}, ${adjustment.bandMax}]`;
+      console.log(
+        `- ${adjustment.cityName} | ${adjustment.attractionName} (${adjustment.categoryName}) ` +
+          `${adjustment.originalCost} -> ${adjustment.finalCost} | source=${adjustment.source} | ${bandLabel}`
+      );
+    }
   }
 }
 

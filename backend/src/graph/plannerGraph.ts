@@ -1,13 +1,23 @@
 import { UserProfile } from '@vibetrip/shared/types/userProfile';
 import { vibeAgent } from '../agents/vibeAgent';
-import { budgetAgent } from '../agents/budgetAgent';
-import { logisticsAgent } from '../agents/logisticsAgent';
-import { diversityAgent } from '../agents/diversityAgent';
 import { reconcilerAgent } from '../agents/reconcilerAgent';
+import { calculateBudget } from '../processing/calculateBudget';
+import { clusterByProximity } from '../processing/clusterByProximity';
+import { ensureDiversity } from '../processing/ensureDiversity';
 import { prisma } from '../lib/prisma';
 
 type PipelineContext = {
   requestId?: string;
+};
+
+type PipelineExecutionMeta = {
+  vibeFallback: boolean;
+  reconcilerFallback: boolean;
+  vibeRetryCount: number;
+  reconcilerRetryCount: number;
+  usedFallback: boolean;
+  retryCount: number;
+  llmSuccess: boolean;
 };
 
 const MAX_LOG_MESSAGE_LENGTH = 220;
@@ -215,13 +225,15 @@ export async function runPlannerGraph(
 ) {
   const primaryLimit = parsePositiveInt(
     process.env.AGENT_ATTRACTION_LIMIT,
-    DEFAULT_AGENT_ATTRACTION_LIMIT
-  );
-  const retryLimit = parsePositiveInt(
-    process.env.AGENT_RETRY_ATTRACTION_LIMIT,
-    DEFAULT_AGENT_RETRY_ATTRACTION_LIMIT
+    20 // reduced from 30 → token safety
   );
 
+  const retryLimit = parsePositiveInt(
+    process.env.AGENT_RETRY_ATTRACTION_LIMIT,
+    10
+  );
+
+  // 1. CITY
   const city = await runStage(context, 'db_find_city', async () =>
     prisma.city.findFirst({
       where: { name: userProfile.city! },
@@ -229,10 +241,14 @@ export async function runPlannerGraph(
   );
 
   if (!city) {
-    const notFoundError = new Error(`City ${userProfile.city} not found in database`);
-    throw new PipelineStageError('db_find_city', notFoundError, context.requestId);
+    throw new PipelineStageError(
+      'db_find_city',
+      new Error(`City ${userProfile.city} not found`),
+      context.requestId
+    );
   }
 
+  // 2. ATTRACTIONS
   const attractions = await runStage(context, 'db_load_attractions', async () =>
     prisma.attraction.findMany({
       where: { cityId: city.id },
@@ -240,82 +256,150 @@ export async function runPlannerGraph(
     })
   );
 
-  let workingAttractions = attractions.slice(0, primaryLimit);
-  if (workingAttractions.length < attractions.length) {
+  // 3. PRE-FILTER
+  const filteredAttractions = await runStage(context, 'pre_filter', async () =>
+    attractions.filter((a) => {
+      if (userProfile.avoid?.includes(a.category.name)) return false;
+      if (userProfile.mobilityNeeds && a.intensityLevel > 3) return false;
+      return true;
+    })
+  );
+
+  // 4. LIMIT FOR TOKEN SAFETY
+  let workingAttractions = filteredAttractions.slice(0, primaryLimit);
+
+  if (workingAttractions.length < filteredAttractions.length) {
     logPipeline(context.requestId, 'agent_input_trim', 'success', {
-      totalAttractions: attractions.length,
+      totalAttractions: filteredAttractions.length,
       sentToAgents: workingAttractions.length,
-      reason: 'token_safety',
     });
   }
 
+  // 5. BUDGET (TS)
+  const budgetOutput = await runStage(context, 'process_budget', async () =>
+    calculateBudget(userProfile, filteredAttractions)
+  );
+
+  // 6. CLUSTERING (TS)
+  const clusters = await runStage(context, 'process_clustering', async () =>
+    clusterByProximity(userProfile, filteredAttractions, budgetOutput)
+  );
+
+  // 7. DIVERSITY (TS)
+  const adjustedClusters = await runStage(context, 'process_diversity', async () =>
+    ensureDiversity(userProfile, clusters, filteredAttractions)
+  );
+
+  // 8. VIBE AGENT (LLM)
   let vibeOutput: any[] = [];
+  let tokensUsed = 0;
+  const executionMeta: PipelineExecutionMeta = {
+    vibeFallback: false,
+    reconcilerFallback: false,
+    vibeRetryCount: 0,
+    reconcilerRetryCount: 0,
+    usedFallback: false,
+    retryCount: 0,
+    llmSuccess: true,
+  };
+
   try {
-    vibeOutput = await runStage(context, 'agent_vibe', async () =>
+    const vibeResult = await runStage(context, 'agent_vibe', async () =>
       vibeAgent(userProfile, workingAttractions)
     );
+    vibeOutput = vibeResult.vibeOutput;
+    tokensUsed += vibeResult.tokensUsed;
+    executionMeta.vibeFallback = vibeResult.meta.usedFallback;
+    executionMeta.vibeRetryCount += vibeResult.meta.retryCount;
+    logPipeline(context.requestId, 'agent_vibe_outcome', 'success', {
+      usedFallback: vibeResult.meta.usedFallback,
+      retryCount: vibeResult.meta.retryCount,
+      llmSuccess: vibeResult.meta.llmSuccess,
+    });
   } catch (error) {
     if (!isTokenLimitError(error)) throw error;
 
-    workingAttractions = attractions.slice(0, retryLimit);
+    workingAttractions = filteredAttractions.slice(0, retryLimit);
+
     logPipeline(context.requestId, 'agent_retry_plan', 'success', {
       retryForStage: 'agent_vibe',
       reason: 'token_limit',
       sentToAgents: workingAttractions.length,
     });
 
-    vibeOutput = await runStage(context, 'agent_vibe_retry', async () =>
+    const vibeRetryResult = await runStage(context, 'agent_vibe_retry', async () =>
       vibeAgent(userProfile, workingAttractions)
     );
+    vibeOutput = vibeRetryResult.vibeOutput;
+    tokensUsed += vibeRetryResult.tokensUsed;
+    executionMeta.vibeFallback = vibeRetryResult.meta.usedFallback;
+    executionMeta.vibeRetryCount += vibeRetryResult.meta.retryCount;
+    logPipeline(context.requestId, 'agent_vibe_outcome', 'success', {
+      usedFallback: vibeRetryResult.meta.usedFallback,
+      retryCount: vibeRetryResult.meta.retryCount,
+      llmSuccess: vibeRetryResult.meta.llmSuccess,
+      sourceStage: 'agent_vibe_retry',
+    });
   }
 
-  const budgetOutput = await runStage(context, 'agent_budget', async () =>
-    budgetAgent(userProfile, vibeOutput)
-  );
+  // 9. RECONCILER (LLM)
+  let itinerary: any;
 
-  let logisticsOutput: any[] = [];
   try {
-    logisticsOutput = await runStage(context, 'agent_logistics', async () =>
-      logisticsAgent(userProfile, vibeOutput, workingAttractions)
+    const reconcilerResult = await runStage(context, 'agent_reconciler', async () =>
+      reconcilerAgent(
+        userProfile,
+        vibeOutput,
+        budgetOutput,
+        clusters,
+        adjustedClusters,
+        filteredAttractions
+      )
     );
+    itinerary = reconcilerResult.itinerary;
+    tokensUsed += reconcilerResult.tokensUsed;
+    executionMeta.reconcilerFallback = reconcilerResult.meta.usedFallback;
+    executionMeta.reconcilerRetryCount += reconcilerResult.meta.retryCount;
+    logPipeline(context.requestId, 'agent_reconciler_outcome', 'success', {
+      usedFallback: reconcilerResult.meta.usedFallback,
+      retryCount: reconcilerResult.meta.retryCount,
+      llmSuccess: reconcilerResult.meta.llmSuccess,
+    });
   } catch (error) {
-    if (!isTokenLimitError(error)) throw error;
+    console.error('[reconciler fallback triggered]');
 
-    const retryAttractions = attractions.slice(0, retryLimit);
-    if (retryAttractions.length !== workingAttractions.length) {
-      workingAttractions = retryAttractions;
-      logPipeline(context.requestId, 'agent_retry_plan', 'success', {
-        retryForStage: 'agent_logistics',
-        reason: 'token_limit',
-        sentToAgents: workingAttractions.length,
-      });
-    }
+    const fallbackClusters = Array.isArray((adjustedClusters as any)?.adjustedClusters)
+      ? (adjustedClusters as any).adjustedClusters
+      : [];
 
-    logisticsOutput = await runStage(context, 'agent_logistics_retry', async () =>
-      logisticsAgent(userProfile, vibeOutput, workingAttractions)
-    );
+    itinerary = {
+      days: fallbackClusters.map((day: any) => ({
+        day: day.day,
+        slots: day.slots.map((slot: any) => ({
+          ...slot,
+          vibe_note: 'auto-generated fallback',
+        })),
+      })),
+      total_cost_estimate: (budgetOutput as any)?.totalBudget || 0,
+    };
+    executionMeta.reconcilerFallback = true;
+    logPipeline(context.requestId, 'agent_reconciler_outcome', 'success', {
+      usedFallback: true,
+      retryCount: executionMeta.reconcilerRetryCount,
+      llmSuccess: false,
+      sourceStage: 'planner_graph_fallback',
+    });
   }
-
-  const diversityOutput = await runStage(context, 'agent_diversity', async () =>
-    diversityAgent(userProfile, logisticsOutput, workingAttractions)
-  );
-
-  const itinerary = await runStage(context, 'agent_reconciler', async () =>
-    reconcilerAgent(
-      userProfile,
-      vibeOutput,
-      budgetOutput,
-      logisticsOutput,
-      diversityOutput,
-      workingAttractions
-    )
-  );
 
   if (!isValidPlannerItinerary(itinerary)) {
-    const invalidPayloadError = new Error('Reconciler returned invalid itinerary payload');
-    throw new PipelineStageError('agent_reconciler', invalidPayloadError, context.requestId);
+    throw new PipelineStageError(
+      'agent_reconciler',
+      new Error('Invalid itinerary format'),
+      context.requestId
+    );
   }
 
+  // 10. STORE
   await runStage(context, 'db_store_itinerary', async () =>
     prisma.itinerary.create({
       data: {
@@ -327,5 +411,15 @@ export async function runPlannerGraph(
     })
   );
 
-  return itinerary;
+  executionMeta.usedFallback =
+    executionMeta.vibeFallback || executionMeta.reconcilerFallback;
+  executionMeta.retryCount =
+    executionMeta.vibeRetryCount + executionMeta.reconcilerRetryCount;
+  executionMeta.llmSuccess = !executionMeta.usedFallback;
+
+  return {
+    itinerary,
+    tokensUsed,
+    meta: executionMeta,
+  };
 }

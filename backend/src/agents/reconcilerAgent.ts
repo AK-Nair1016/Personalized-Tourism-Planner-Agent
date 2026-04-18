@@ -1,5 +1,6 @@
 import groq, { GROQ_MODEL } from '../lib/groq';
 import { UserProfile } from '@vibetrip/shared/types/userProfile';
+import { callWithRetry } from '../utils/retry';
 import {
   compactAttractionsForPrompt,
   compactDiversityOutputForPrompt,
@@ -37,6 +38,18 @@ type ReconcilerItinerary = {
   days: ReconcilerDay[];
 };
 
+type AgentExecutionMeta = {
+  usedFallback: boolean;
+  retryCount: number;
+  llmSuccess: boolean;
+};
+
+export type ReconcilerAgentResult = {
+  itinerary: ReconcilerItinerary;
+  tokensUsed: number;
+  meta: AgentExecutionMeta;
+};
+
 type AttractionSnapshot = {
   id: string;
   name: string;
@@ -47,6 +60,17 @@ type AttractionSnapshot = {
 };
 
 const SLOT_ORDER: SlotName[] = ['morning', 'afternoon', 'evening'];
+
+function extractTokensUsed(response: any) {
+  const usage = response?.usage;
+  const total =
+    usage?.total_tokens ??
+    usage?.totalTokens ??
+    usage?.total ??
+    0;
+
+  return Number.isFinite(total) ? Number(total) : 0;
+}
 
 function toFiniteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
@@ -507,45 +531,65 @@ export async function reconcilerAgent(
   logisticsOutput: any[],
   diversityOutput: any,
   attractions: any[]
-) {
-  const maxAttractions = Number(process.env.AGENT_ATTRACTION_LIMIT ?? 30);
+): Promise<ReconcilerAgentResult> {
+  const maxAttractions = Math.min(
+    Number(process.env.AGENT_ATTRACTION_LIMIT ?? 20),
+    20
+  );
+
   const compactProfile = compactUserProfileForPrompt(userProfile);
-  const compactVibe = compactVibeOutputForPrompt(vibeOutput, maxAttractions);
-  const compactLogistics = compactLogisticsOutputForPrompt(logisticsOutput);
-  const compactDiversity = compactDiversityOutputForPrompt(diversityOutput);
-  const compactAttractions = compactAttractionsForPrompt(attractions, maxAttractions);
 
+  // ✅ compact vibe
+  const compactVibe = vibeOutput.slice(0, maxAttractions).map((v: any) => ({
+    id: v?.attraction_id ?? v?.id ?? null,
+    score: v?.vibe_fit_score ?? v?.score ?? 0.5,
+  }));
+
+  // ✅ clusters (ONLY IDs)
+  const adjustedClusters = Array.isArray(diversityOutput?.adjustedClusters)
+    ? diversityOutput.adjustedClusters
+    : logisticsOutput;
+
+  const compactClusters = adjustedClusters.map((day: any) => ({
+    day: day?.day ?? null,
+    slots: Array.isArray(day?.slots)
+      ? day.slots.map((s: any) => ({
+          attraction_id: s?.attractionId ?? s?.attraction_id ?? null,
+        }))
+      : [],
+  }));
+
+  // ✅ COMPRESSED BUDGET (IMPORTANT)
+  const compactBudget = {
+    dailyBudgetCap: budgetOutput?.dailyBudgetCap ?? null,
+    totalBudget: userProfile.budget ?? null,
+  };
+
+  // 🔥 SIMPLIFIED PROMPT (MAJOR TOKEN REDUCTION)
   const prompt = `
-You are the final travel planner. You receive four specialist reports and must build the best possible itinerary from them.
+You are a travel planner.
 
-Conflict resolution rules (in priority order):
-1. Budget hard cap: never include an activity that exceeds the daily budget cap from the Budget Agent
-2. Must-visit: always include any must_visit attraction the user specified, regardless of other scores
-3. Vibe fit: prefer attractions with vibe_fit_score >= 0.6 from the Vibe Agent
-4. Logistics: follow the day clusters and slot ordering from the Logistics Agent
-5. Diversity: apply any replacements from the Diversity Agent unless they conflict with rules 1-3
+Build a day-by-day itinerary using given clusters and preferences.
 
-For each activity, write a "why this fits your vibe" note of exactly 1-2 sentences in a warm, personal tone.
+Rules:
+- Respect daily budget cap
+- Prefer high vibe score attractions
+- Maintain slot order: morning, afternoon, evening
 
-User profile:
+User:
 ${JSON.stringify(compactProfile)}
 
-Vibe agent output:
+Vibe:
 ${JSON.stringify(compactVibe)}
 
-Budget agent output:
-${JSON.stringify(budgetOutput)}
+Budget:
+${JSON.stringify(compactBudget)}
 
-Logistics agent output:
-${JSON.stringify(compactLogistics)}
+Clusters:
+${JSON.stringify(compactClusters)}
 
-Diversity agent output:
-${JSON.stringify(compactDiversity)}
+Return ONLY JSON:
 
-Attractions:
-${JSON.stringify(compactAttractions)}
-
-Return a JSON object with this exact structure:
 {
   "city": string,
   "total_cost_estimate": number,
@@ -571,18 +615,49 @@ Return a JSON object with this exact structure:
     }
   ]
 }
-
-Return ONLY the JSON object, no prose.
 `;
 
-  const response = await groq.chat.completions.create({
-    model: GROQ_MODEL,
-    messages: [{ role: 'user', content: prompt }],
-    temperature: 0.3,
-    max_completion_tokens: 4000,
-  });
+  let text = '{}';
+  let tokensUsed = 0;
+  let retryCount = 0;
 
-  const text = response.choices[0].message.content || '{}';
+  try {
+    const response = await callWithRetry(() =>
+      groq.chat.completions.create({
+        model: GROQ_MODEL,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.2,
+        max_completion_tokens: 2500,
+      }),
+      {
+        onRetry: () => {
+          retryCount += 1;
+        },
+      }
+    );
+    tokensUsed = extractTokensUsed(response);
+
+    text = response.choices[0]?.message?.content || '{}';
+
+  } catch (error) {
+    console.error('[reconcilerAgent] LLM error → fallback triggered', error);
+
+      return {
+        itinerary: buildFallbackItinerary(
+          userProfile,
+          vibeOutput,
+          logisticsOutput,
+          attractions
+        ),
+        tokensUsed,
+        meta: {
+          usedFallback: true,
+          retryCount,
+          llmSuccess: false,
+        },
+      };
+  }
+
   const fallback = buildFallbackItinerary(
     userProfile,
     vibeOutput,
@@ -592,10 +667,27 @@ Return ONLY the JSON object, no prose.
 
   const parsed = parseModelJson(text);
   const normalized = normalizeParsedItinerary(parsed, fallback);
+
   if (normalized) {
-    return normalized;
+    return {
+      itinerary: normalized,
+      tokensUsed,
+      meta: {
+        usedFallback: false,
+        retryCount,
+        llmSuccess: true,
+      },
+    };
   }
 
-  console.error('reconcilerAgent parse error:', text);
-  return fallback;
+  console.error('[reconcilerAgent] parse error → fallback', text);
+  return {
+    itinerary: fallback,
+    tokensUsed,
+    meta: {
+      usedFallback: true,
+      retryCount,
+      llmSuccess: false,
+    },
+  };
 }

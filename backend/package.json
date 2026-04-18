@@ -5,7 +5,11 @@
   "main": "index.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
-    "test:cases": "ts-node src/tests/testCases.ts"
+    "test:cases": "ts-node src/tests/testCases.ts",
+    "seed": "TS_NODE_TRANSPILE_ONLY=1 node -r ts-node/register prisma/seed/seeders/index.ts",
+    "seed:dev": "dotenv_config_path=.env TS_NODE_TRANSPILE_ONLY=1 node -r dotenv/config -r ts-node/register prisma/seed/seeders/index.ts",
+    "seed:prod": "dotenv_config_path=.env.production TS_NODE_TRANSPILE_ONLY=1 node -r dotenv/config -r ts-node/register prisma/seed/seeders/index.ts",
+    "seed:verify": "TS_NODE_TRANSPILE_ONLY=1 node -r ts-node/register src/tests/seedIntegrity.ts"
   },
   "keywords": [],
   "author": "",

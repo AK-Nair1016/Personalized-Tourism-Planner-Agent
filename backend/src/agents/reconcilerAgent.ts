@@ -430,11 +430,16 @@ function buildFallbackItinerary(
   };
 }
 
-function normalizeParsedItinerary(parsed: unknown, fallback: ReconcilerItinerary) {
+function normalizeParsedItinerary(
+  parsed: unknown,
+  fallback: ReconcilerItinerary,
+  attractions: any[]
+) {
   if (typeof parsed !== 'object' || parsed === null) return null;
   const row = parsed as AnyRecord;
   const daysRaw = row.days;
   if (!Array.isArray(daysRaw)) return null;
+  const attractionsById = buildAttractionIndex(attractions);
 
   const days: ReconcilerDay[] = daysRaw
     .map((dayItem, dayIndex) => {
@@ -454,28 +459,36 @@ function normalizeParsedItinerary(parsed: unknown, fallback: ReconcilerItinerary
             slotRecord.attraction_id,
             fallbackSlot?.attraction_id ?? `slot-${dayIndex + 1}-${slotIndex + 1}`
           );
+          const canonicalAttraction = attractionsById.get(attractionId);
 
           return {
             slot: normalizeSlotName(slotRecord.slot, slotIndex),
             attraction_id: attractionId,
-            attraction_name: safeString(
-              slotRecord.attraction_name,
-              fallbackSlot?.attraction_name ?? `Activity ${slotIndex + 1}`
-            ),
-            category: safeString(slotRecord.category, fallbackSlot?.category ?? 'general'),
+            attraction_name:
+              canonicalAttraction?.name ??
+              safeString(
+                slotRecord.attraction_name,
+                fallbackSlot?.attraction_name ?? `Activity ${slotIndex + 1}`
+              ),
+            category:
+              canonicalAttraction?.category ??
+              safeString(slotRecord.category, fallbackSlot?.category ?? 'general'),
             estimated_cost:
+              canonicalAttraction?.avgCost ??
               toFiniteNumber(slotRecord.estimated_cost) ??
               fallbackSlot?.estimated_cost ??
               0,
-            duration_minutes: Math.max(
-              15,
-              Math.round(
-                toFiniteNumber(slotRecord.duration_minutes) ??
-                  fallbackSlot?.duration_minutes ??
-                  90
-              )
-            ),
-            coordinates,
+            duration_minutes:
+              canonicalAttraction?.durationMinutes ??
+              Math.max(
+                15,
+                Math.round(
+                  toFiniteNumber(slotRecord.duration_minutes) ??
+                    fallbackSlot?.duration_minutes ??
+                    90
+                )
+              ),
+            coordinates: canonicalAttraction?.coordinates ?? coordinates,
             vibe_note: safeString(
               slotRecord.vibe_note,
               fallbackSlot?.vibe_note ?? 'A great match for your travel vibe.'
@@ -514,7 +527,11 @@ function normalizeParsedItinerary(parsed: unknown, fallback: ReconcilerItinerary
     }));
 
   const computedTotal = normalizedDays.reduce((sum, day) => sum + day.day_cost_estimate, 0);
-  const totalCost = toFiniteNumber(row.total_cost_estimate) ?? computedTotal;
+  const providedTotal = toFiniteNumber(row.total_cost_estimate);
+  const totalCost =
+    providedTotal !== null && Math.abs(providedTotal - computedTotal) <= 1
+      ? providedTotal
+      : computedTotal;
 
   return {
     city: safeString(row.city, fallback.city),
@@ -666,7 +683,7 @@ Return ONLY JSON:
   );
 
   const parsed = parseModelJson(text);
-  const normalized = normalizeParsedItinerary(parsed, fallback);
+  const normalized = normalizeParsedItinerary(parsed, fallback, attractions);
 
   if (normalized) {
     return {

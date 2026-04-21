@@ -5,6 +5,7 @@ import { calculateBudget } from '../processing/calculateBudget';
 import { clusterByProximity } from '../processing/clusterByProximity';
 import { ensureDiversity } from '../processing/ensureDiversity';
 import { prisma } from '../lib/prisma';
+import { getEnhancedAttractions } from "../services/attractionsEnhanced";
 
 type PipelineContext = {
   requestId?: string;
@@ -248,19 +249,27 @@ export async function runPlannerGraph(
     );
   }
 
-  // 2. ATTRACTIONS
-  const attractions = await runStage(context, 'db_load_attractions', async () =>
-    prisma.attraction.findMany({
-      where: { cityId: city.id },
-      include: { category: true },
-    })
-  );
+   // 2. ATTRACTIONS
+console.log("🔥 CALLING getEnhancedAttractions", {
+  cityId: city.id,
+  cityName: city.name
+});
+
+const attractions = await getEnhancedAttractions(
+  city.id,
+  city.name,
+  "top tourist attractions"
+);
+
+console.log("🔥 ATTRACTIONS RECEIVED", {
+  count: attractions.length
+});
 
   // 3. PRE-FILTER
   const filteredAttractions = await runStage(context, 'pre_filter', async () =>
     attractions.filter((a) => {
-      if (userProfile.avoid?.includes(a.category.name)) return false;
-      if (userProfile.mobilityNeeds && a.intensityLevel > 3) return false;
+      if (userProfile.avoid?.includes((a as any).category?.name)) return false;
+      if (userProfile.mobilityNeeds && (a as any).intensityLevel > 3) return false;
       return true;
     })
   );

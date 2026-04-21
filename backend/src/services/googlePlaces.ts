@@ -1,7 +1,7 @@
 // backend/src/services/googlePlaces.ts
 
 const GOOGLE_BASE_URL = "https://maps.googleapis.com/maps/api/place/textsearch/json";
-const API_KEY = process.env.GOOGLE_PLACES_API_KEY;
+const API_KEY = process.env.GOOGLE_PLACES_KEY;
 
 // ===== TYPES =====
 export type GooglePlace = {
@@ -13,7 +13,6 @@ export type GooglePlace = {
   rating: number | null;
   types: string[];
   source: "google_places";
-  
 };
 
 // ===== CACHE =====
@@ -24,12 +23,12 @@ type CacheEntry = {
 
 const cache = new Map<string, CacheEntry>();
 const TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
+
 let monthlyUsage = 0;
-const MONTHLY_LIMIT = 400; // keep buffer below 500 free tier
+const MONTHLY_LIMIT = 400;
 
 // ===== HELPERS =====
 
-// Convert Google price_level (0–4) → estimated cost (INR)
 function mapPriceLevel(priceLevel?: number): number {
   switch (priceLevel) {
     case 0: return 0;
@@ -37,11 +36,10 @@ function mapPriceLevel(priceLevel?: number): number {
     case 2: return 500;
     case 3: return 1000;
     case 4: return 2000;
-    default: return 300; // fallback
+    default: return 300;
   }
 }
 
-// Normalize Google response → internal format
 function normalizePlace(place: any): GooglePlace {
   return {
     id: place.place_id,
@@ -55,38 +53,78 @@ function normalizePlace(place: any): GooglePlace {
   };
 }
 
+// 🔥 DRY query builder
+function buildQuery(query: string, city: string) {
+  return `${query} in ${city}`;
+}
+
 // ===== MAIN FUNCTION =====
-export async function fetchGooglePlaces(query: string, city: string) {
-  // ---- HARD LIMIT GUARD ----
+export async function fetchGooglePlaces(
+  query: string,
+  city: string
+): Promise<GooglePlace[]> {
+
+  if (!API_KEY) {
+    console.error("[googlePlaces] Missing API key");
+    return [];
+  }
+
+  const finalQuery = buildQuery(query, city);
+  const cacheKey = finalQuery.toLowerCase();
+
+  // ---- CACHE HIT ----
+  const cached = cache.get(cacheKey);
+  if (cached && cached.expiry > Date.now()) {
+    console.debug(`[googlePlaces] cache HIT for "${finalQuery}"`);
+    return cached.data;
+  }
+
+  // ---- QUOTA GUARD ----
   if (monthlyUsage >= MONTHLY_LIMIT) {
-    console.warn("Google Places quota limit reached");
+    console.warn("[googlePlaces] quota limit reached");
     return [];
   }
 
   try {
-    const url = `${GOOGLE_BASE_URL}?query=${encodeURIComponent(
-      `${query} in ${city}`
-    )}&key=${API_KEY}`;
+    const url = `${GOOGLE_BASE_URL}?query=${encodeURIComponent(finalQuery)}&key=${API_KEY}`;
+
+    console.debug(`[googlePlaces] requesting: "${finalQuery}"`);
 
     const response = await fetch(url);
 
     if (!response.ok) {
-      throw new Error(`Google API error: ${response.status}`);
+      console.error(`[googlePlaces] HTTP error ${response.status}`);
+      return [];
     }
 
     const data = await response.json();
 
-    const results = data.results?.slice(0, 10).map(normalizePlace) || [];
+    // 🔥 IMPORTANT: check API status
+    if (data.status !== "OK") {
+      console.warn(`[googlePlaces] API status: ${data.status}`, data.error_message);
+      return [];
+    }
+
+    const results: GooglePlace[] =
+      data.results?.slice(0, 10).map(normalizePlace) || [];
+
+    console.debug(`[googlePlaces] results=${results.length}`);
 
     // ---- TRACK USAGE ----
     if (results.length > 0) {
       monthlyUsage++;
     }
 
+    // ---- CACHE STORE ----
+    cache.set(cacheKey, {
+      data: results,
+      expiry: Date.now() + TTL,
+    });
+
     return results;
 
   } catch (error) {
-    console.error("Google Places fetch failed:", error);
+    console.error("[googlePlaces] fetch failed:", error);
     return [];
   }
 }

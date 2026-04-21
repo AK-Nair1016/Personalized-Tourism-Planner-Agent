@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../lib/prisma';
 import { convertInrToLocal, getCurrencySymbol } from '../utils/currency';
 import { fetchGooglePlaces, type GooglePlace } from '../services/googlePlaces';
+import { dedupePlaces } from '../utils/dedupePlaces';
 
 export async function getAttractions(req: Request, res: Response, next: NextFunction) {
   try {
@@ -42,55 +43,77 @@ export async function getAttractions(req: Request, res: Response, next: NextFunc
       };
     });
 
-    // ---- STEP 3: OPTIONAL Google enrichment ----
-    if (query && typeof query === 'string') {
-      const queryStr = query; // ✅ safe string
+   // ---- STEP 3: OPTIONAL Google enrichment ----
+if (query && typeof query === 'string') {
+  const queryStr = query;
 
-      try {
-        let cityName: string | undefined = attractions[0]?.city?.name;
+  try {
+    let cityName: string | undefined = attractions[0]?.city?.name;
 
-        // fallback if DB returned empty
-        if (!cityName) {
-          const city = await prisma.city.findUnique({
-            where: { id: String(cityId) },
-          });
+    // fallback if DB returned empty
+    if (!cityName) {
+      const city = await prisma.city.findUnique({
+        where: { id: String(cityId) },
+      });
 
-          if (city?.name) {
-            cityName = city.name;
-          }
-        }
-
-        if (cityName) {
-          console.debug(`[googlePlaces] attempting query="${queryStr}" city="${cityName}"`);
-
-          const googleResults: GooglePlace[] = await fetchGooglePlaces(queryStr, cityName);
-
-          console.debug(`[googlePlaces] results=${googleResults.length} city=${cityName}`);
-
-          if (googleResults.length > 0) {
-            return res.json(
-              googleResults.map((place) => ({
-                id: place.id,
-                name: place.name,
-                latitude: place.latitude,
-                longitude: place.longitude,
-                avgCostInr: place.estimated_cost,
-                avgCostLocal: place.estimated_cost,
-                localCurrencyCode: 'INR',
-                localCurrencySymbol: '₹',
-                rating: place.rating,
-                source: 'google_places' as const,
-              }))
-            );
-          }
-        } else {
-          console.warn(`[googlePlaces] city not found for cityId=${cityId}`);
-        }
-
-      } catch (err) {
-        console.warn('Google enrichment failed, falling back to DB');
+      if (city?.name) {
+        cityName = city.name;
       }
     }
+
+    if (cityName) {
+      console.debug(`[googlePlaces] attempting query="${queryStr}" city="${cityName}"`);
+
+      const googleResults: GooglePlace[] = await fetchGooglePlaces(queryStr, cityName);
+
+      console.debug(`[googlePlaces] results=${googleResults.length} city=${cityName}`);
+
+      if (googleResults.length > 0) {
+        // 🔧 Map Google
+        const googleMapped = googleResults.map((place) => ({
+          id: place.id,
+          name: place.name,
+          latitude: place.latitude,
+          longitude: place.longitude,
+          avgCostInr: place.estimated_cost,
+          avgCostLocal: place.estimated_cost,
+          localCurrencyCode: 'INR',
+          localCurrencySymbol: '₹',
+          rating: place.rating,
+          source: 'google_places' as const,
+        }));
+
+        // 🔧 Map DB
+        const dbMapped = normalized.map((a) => ({
+          id: a.id,
+          name: a.name,
+          latitude: a.latitude,
+          longitude: a.longitude,
+          avgCostInr: a.avgCostInr,
+          avgCostLocal: a.avgCostLocal,
+          localCurrencyCode: a.localCurrencyCode,
+          localCurrencySymbol: a.localCurrencySymbol,
+          rating: a.rating,
+          source: 'seed_data' as const,
+        }));
+
+        // 🔥 Merge + dedupe
+        const merged = dedupePlaces(dbMapped, googleMapped);
+
+        console.debug(
+          `[attractions] merged=${merged.length} (db=${dbMapped.length}, google=${googleMapped.length})`
+        );
+
+        return res.json(merged);
+      }
+    } else {
+      console.warn(`[googlePlaces] city not found for cityId=${cityId}`);
+    }
+
+  } catch (err) {
+    console.warn('Google enrichment failed, falling back to DB');
+  }
+}
 
     // ---- STEP 4: Default response ----
     console.debug(`[attractions] returning SEED data`);

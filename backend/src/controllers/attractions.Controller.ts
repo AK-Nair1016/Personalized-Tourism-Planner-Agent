@@ -28,7 +28,7 @@ export async function getAttractions(req: Request, res: Response, next: NextFunc
     });
 
     // ---- STEP 2: Existing normalization ----
-    const normalized = attractions.map((attraction) => {
+    const normalized = attractions.map((attraction: any) => {
       const localCurrencyCode = attraction.city.country.currencyCode;
       const localCurrencySymbol =
         attraction.city.country.currencySymbol || getCurrencySymbol(localCurrencyCode);
@@ -84,7 +84,7 @@ if (query && typeof query === 'string') {
         }));
 
         // 🔧 Map DB
-        const dbMapped = normalized.map((a) => ({
+        const dbMapped = normalized.map((a: any) => ({
           id: a.id,
           name: a.name,
           latitude: a.latitude,

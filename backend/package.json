@@ -5,6 +5,13 @@
   "main": "index.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "test:replan": "npm run test:replan:flow && npm run test:replan:disruption && npm run test:reconciler:guardrails && npm run test:replan:controller && npm run test:replan:api",
+    "test:cluster": "ts-node src/tests/clusterByProximity.test.ts",
+    "test:replan:flow": "ts-node src/tests/replanFlow.test.ts",
+    "test:replan:disruption": "ts-node src/tests/replanDisruption.test.ts",
+    "test:reconciler:guardrails": "ts-node src/tests/reconcilerGuardrails.test.ts",
+    "test:replan:controller": "ts-node src/tests/replanController.test.ts",
+    "test:replan:api": "ts-node src/tests/replanRoute.test.ts",
     "test:cases": "ts-node src/tests/testCases.ts",
     "seed": "TS_NODE_TRANSPILE_ONLY=1 node -r ts-node/register prisma/seed/seeders/index.ts",
     "seed:dev": "dotenv_config_path=.env TS_NODE_TRANSPILE_ONLY=1 node -r dotenv/config -r ts-node/register prisma/seed/seeders/index.ts",
@@ -16,21 +23,22 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "@prisma/adapter-pg": "^7.6.0",
-    "@prisma/client": "^7.5.0",
+    "@prisma/client": "5.22.0",
     "@vibetrip/shared": "file:../shared",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "groq-sdk": "^1.1.2",
     "pg": "^8.16.3",
-    "prisma": "^7.5.0"
+    "prisma": "5.22.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^25.5.0",
+    "@types/supertest": "^7.2.0",
     "nodemon": "^3.1.14",
+    "supertest": "^7.2.2",
     "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
     "typescript": "^6.0.2"

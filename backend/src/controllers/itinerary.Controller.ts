@@ -7,6 +7,7 @@ import {
   getCurrencySymbol,
   getInrToLocalRate,
 } from '../utils/currency';
+import { UserProfile } from '@vibetrip/shared';
 
 type RequestError = Error & {
   requestId?: string;
@@ -48,6 +49,15 @@ function asString(value: unknown, fallback = 'n/a') {
 
 function round2(value: number) {
   return Number(value.toFixed(2));
+}
+
+function normalizeDisruptionSlot(value: unknown): 'morning' | 'afternoon' | 'evening' | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'morning' || normalized === 'afternoon' || normalized === 'evening') {
+    return normalized;
+  }
+  return null;
 }
 
 function buildCostAudit(itinerary: ItineraryLike) {
@@ -214,17 +224,98 @@ export async function generateItinerary(req: Request, res: Response, next: NextF
 }
 
 export async function replanItinerary(req: Request, res: Response, next: NextFunction) {
-  try {
-    const { itinerary_id, disruption } = req.body;
+  const requestId = req.header('x-request-id') || crypto.randomUUID();
+  const startedAt = Date.now();
+  res.setHeader('x-request-id', requestId);
 
-    if (!itinerary_id || !disruption) {
-      return res.status(400).json({ error: 'itinerary_id and disruption are required' });
+  try {
+    const { itineraryId, disruption } = req.body;
+
+    if (!itineraryId || !disruption) {
+      return res.status(400).json({ error: 'itineraryId and disruption are required' });
     }
 
-    // Day 6 - wire replan logic here
-    console.log('replan called:', itinerary_id, disruption);
-    res.json({ message: 'Replan coming Day 6' });
+    console.log(`[itinerary.replan] requestId=${requestId} itineraryId=${itineraryId}`);
+
+    const normalizedDisruptionSlot = normalizeDisruptionSlot(
+      (disruption as { slot?: unknown })?.slot
+    );
+    const normalizedDisruptionDay = Math.trunc(asNumber((disruption as { day?: unknown })?.day));
+    const normalizedDisruptionDescription = asString(
+      (disruption as { description?: unknown })?.description,
+      ''
+    ).trim();
+
+    if (normalizedDisruptionDay < 1) {
+      return res.status(400).json({ error: 'disruption.day must be a positive integer' });
+    }
+    if (!normalizedDisruptionSlot) {
+      return res
+        .status(400)
+        .json({ error: 'disruption.slot must be morning, afternoon, or evening' });
+    }
+    if (!normalizedDisruptionDescription) {
+      return res.status(400).json({ error: 'disruption.description is required' });
+    }
+
+    const normalizedDisruption = {
+      day: normalizedDisruptionDay,
+      description: normalizedDisruptionDescription,
+      slot: normalizedDisruptionSlot,
+    };
+
+    // ✅ FIX: singular model
+    const existing = await prisma.itinerary.findUnique({
+      where: { id: itineraryId }
+    });
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Itinerary not found' });
+    }
+
+    const userProfile = existing.userProfileJson as unknown as UserProfile;
+    const oldItinerary = existing.itineraryJson;
+
+    const updatedItinerary = await runPlannerGraph(
+      userProfile,
+      {
+        existingItinerary: oldItinerary,
+        disruption: normalizedDisruption,
+        requestId,
+      }
+    );
+
+    const cityForCurrency = await prisma.city.findFirst({
+      where: { name: String(userProfile?.city ?? updatedItinerary.itinerary?.city ?? '') },
+      include: { country: true },
+    });
+    const localCurrencyCode = cityForCurrency?.country?.currencyCode ?? 'INR';
+    const localCurrencySymbol =
+      cityForCurrency?.country?.currencySymbol ?? getCurrencySymbol(localCurrencyCode);
+    const localizedItinerary = localizeItineraryCosts(
+      updatedItinerary.itinerary as ItineraryLike,
+      localCurrencyCode,
+      localCurrencySymbol
+    );
+
+    await prisma.replanLog.create({
+      data: {
+        itineraryId,
+        disruptionJson: normalizedDisruption,
+        updatedItineraryJson: updatedItinerary.itinerary as any,
+        executionTimeMs: Date.now() - startedAt,
+      }
+    });
+
+    return res.json({
+      ...localizedItinerary,
+      replan_context: updatedItinerary.replanContext,
+      tokensUsed: updatedItinerary.tokensUsed,
+      meta: updatedItinerary.meta,
+    });
+
   } catch (err) {
     next(err);
   }
 }
+

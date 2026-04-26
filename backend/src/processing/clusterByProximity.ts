@@ -53,11 +53,15 @@ function orderByNearestNeighbour(attractions: any[]): any[] {
 }
 
 function getSlotsPerDay(pace: string): number {
+  // The itinerary contract everywhere else in the pipeline is fixed to
+  // morning / afternoon / evening. Returning more than 3 here creates
+  // duplicate "evening" slots and unstable reconciler input.
   switch (pace) {
-    case 'fast': return 5;
-    case 'moderate': return 4;
+    case 'fast':
+    case 'moderate':
     case 'relaxed':
-    default: return 3;
+    default:
+      return 3;
   }
 }
 
@@ -78,7 +82,8 @@ function getLastDaySlots(departureTime: string, slotsPerDay: number): number {
   const hour = parseInt(departureTime.split(':')[0]);
   if (hour < 10) return 0;
   if (hour < 14) return 1;
-  return Math.min(2, slotsPerDay);
+  if (hour < 18) return Math.min(2, slotsPerDay);
+  return Math.min(3, slotsPerDay);
 }
 
 export function clusterByProximity(

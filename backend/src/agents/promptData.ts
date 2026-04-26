@@ -93,6 +93,9 @@ export function compactAttractionsForPrompt(attractions: any[], limit: number) {
       area: row.area ?? row.neighborhood ?? row.cluster_area ?? null,
       avg_cost: row.avg_cost ?? row.avgCost ?? null,
       duration_minutes: row.duration_minutes ?? row.durationMinutes ?? null,
+      best_time_slot: row.bestTimeSlot ?? row.best_time_slot ?? null,
+      indoor_outdoor: row.indoorOutdoor ?? row.indoor_outdoor ?? null,
+      vibe_tags: Array.isArray(row.vibeTags) ? row.vibeTags : null,
       coordinates: getCoordinates(row),
     };
   });

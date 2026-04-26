@@ -5,9 +5,34 @@ import { calculateBudget } from '../processing/calculateBudget';
 import { clusterByProximity } from '../processing/clusterByProximity';
 import { ensureDiversity } from '../processing/ensureDiversity';
 import { prisma } from '../lib/prisma';
+import { getEnhancedAttractions } from "../services/attractionsEnhanced";
+import {
+  normalizeMergedItinerary,
+  PlannerDayLike,
+  PlannerItineraryRecord,
+  splitItineraryForReplan,
+} from './replanUtils';
+import {
+  attractionMatchesAvoidTerms,
+  buildDisruptionAwareProfile,
+  deriveDisruptionPolicy,
+  filterAndRankAttractionsForDisruption,
+  getPreservedAttractionExclusions,
+  getDisruptedSlotContext,
+  isAttractionAllowedByDisruptionPolicy,
+} from './replanDisruption';
 
 type PipelineContext = {
   requestId?: string;
+
+  // 🔥 REPLAN SUPPORT
+  existingItinerary?: any;
+
+  disruption?: {
+    day: number;
+    slot: 'morning' | 'afternoon' | 'evening';
+    description: string;
+  };
 };
 
 type PipelineExecutionMeta = {
@@ -15,10 +40,14 @@ type PipelineExecutionMeta = {
   reconcilerFallback: boolean;
   vibeRetryCount: number;
   reconcilerRetryCount: number;
+  reconcilerCorrectedVibeNotes: number;
   usedFallback: boolean;
   retryCount: number;
   llmSuccess: boolean;
 };
+
+type SlotName = 'morning' | 'afternoon' | 'evening';
+const REQUIRED_SLOTS: SlotName[] = ['morning', 'afternoon', 'evening'];
 
 const MAX_LOG_MESSAGE_LENGTH = 220;
 const DEFAULT_AGENT_ATTRACTION_LIMIT = 30;
@@ -105,11 +134,376 @@ type PlannerItineraryLike = {
   days: unknown[];
 };
 
+type FallbackSlot = {
+  slot: 'morning' | 'afternoon' | 'evening';
+  attraction_id: string;
+  attraction_name: string;
+  category: string;
+  estimated_cost: number;
+  duration_minutes: number;
+  coordinates: { lat: number; lng: number };
+  vibe_note: string;
+};
+
 function isValidPlannerItinerary(value: unknown): value is PlannerItineraryLike {
   if (typeof value !== 'object' || value === null) return false;
   const candidate = value as Record<string, unknown>;
   return Array.isArray(candidate.days);
 }
+
+function normalizeSlotName(value: unknown): SlotName | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'morning' || normalized === 'afternoon' || normalized === 'evening') {
+    return normalized;
+  }
+  return null;
+}
+
+function toFiniteNumber(value: unknown, fallback = 0) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function toLowerString(value: unknown) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function cloneRecord<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function buildSafePlaceholderSlot(day: number, slot: SlotName) {
+  const attractionName = `Fallback Landmark Day ${day}`;
+  return {
+    slot,
+    attraction_id: `safe-${day}-${slot}`,
+    attraction_name: attractionName,
+    category: 'landmark',
+    estimated_cost: 0,
+    duration_minutes: 60,
+    coordinates: { lat: 0, lng: 0 },
+    vibe_note: `${attractionName} is a great stop for this slot.`,
+  };
+}
+
+function sanitizeVibeNoteForSlot(
+  slot: any,
+  daySlots: any[],
+  fixes: string[]
+) {
+  const attractionName = typeof slot?.attraction_name === 'string' ? slot.attraction_name : '';
+  const rawNote = typeof slot?.vibe_note === 'string' ? slot.vibe_note.trim() : '';
+  const noteLower = rawNote.toLowerCase();
+  const attractionLower = attractionName.toLowerCase();
+
+  const includesOwnAttraction = attractionLower.length > 0 && noteLower.includes(attractionLower);
+  const referencesOtherAttraction = daySlots.some((otherSlot: any) => {
+    if (otherSlot === slot) return false;
+    const otherName =
+      typeof otherSlot?.attraction_name === 'string' ? otherSlot.attraction_name.trim().toLowerCase() : '';
+    if (!otherName || otherName === attractionLower) return false;
+    return noteLower.includes(otherName);
+  });
+
+  if (!includesOwnAttraction || referencesOtherAttraction) {
+    slot.vibe_note = `${attractionName} is a great stop for this slot.`;
+    fixes.push('vibe_note_sanitized');
+  }
+}
+
+function isDisallowedCategory(category: unknown, disallowedCategories: string[]) {
+  const normalized = toLowerString(category);
+  return normalized.length > 0 && disallowedCategories.includes(normalized);
+}
+
+function buildStrictReplanItinerary(
+  existingItinerary: PlannerItineraryRecord,
+  candidateItinerary: PlannerItineraryRecord,
+  disruption: { day: number; slot: SlotName },
+  disallowedCategories: string[]
+) {
+  const fixes: string[] = [];
+  const reference = cloneRecord(existingItinerary ?? {});
+  const referenceDays = Array.isArray(reference.days) ? reference.days : [];
+  const candidateDays = Array.isArray(candidateItinerary?.days) ? candidateItinerary.days : [];
+  const targetDayIndex = referenceDays.findIndex((day) => day?.day === disruption.day);
+
+  if (targetDayIndex < 0) {
+    return {
+      itinerary: candidateItinerary,
+      fixes: ['missing_disrupted_day_in_reference'],
+    };
+  }
+
+  const targetDay = cloneRecord(referenceDays[targetDayIndex] ?? {});
+  const targetDaySlots: any[] = Array.isArray(targetDay.slots) ? [...targetDay.slots] : [];
+  const originalSlot: any = targetDaySlots.find(
+    (slot) => normalizeSlotName((slot as Record<string, unknown>)?.slot) === disruption.slot
+  );
+  const candidateDay = candidateDays.find((day) => day?.day === disruption.day);
+  const candidateSlots: any[] = Array.isArray(candidateDay?.slots) ? candidateDay.slots : [];
+  const incomingSlotRaw =
+    candidateSlots.find((slot) => normalizeSlotName((slot as Record<string, unknown>)?.slot) === disruption.slot) ??
+    candidateSlots[0];
+
+  let replacement: any = incomingSlotRaw
+    ? { ...incomingSlotRaw, slot: disruption.slot }
+    : originalSlot
+      ? { ...originalSlot, slot: disruption.slot }
+      : buildSafePlaceholderSlot(disruption.day, disruption.slot);
+
+  if (!incomingSlotRaw) fixes.push('missing_replanned_slot_fallback_used');
+  if (!originalSlot) fixes.push('missing_original_slot_in_reference');
+
+  if (!replacement.attraction_name) {
+    replacement = {
+      ...replacement,
+      attraction_name: originalSlot?.attraction_name ?? buildSafePlaceholderSlot(disruption.day, disruption.slot).attraction_name,
+    };
+    fixes.push('missing_attraction_name_fixed');
+  }
+
+  if (!replacement.attraction_id) {
+    replacement = {
+      ...replacement,
+      attraction_id: originalSlot?.attraction_id ?? buildSafePlaceholderSlot(disruption.day, disruption.slot).attraction_id,
+    };
+    fixes.push('missing_attraction_id_fixed');
+  }
+
+  if (isDisallowedCategory(replacement.category, disallowedCategories)) {
+    if (originalSlot && !isDisallowedCategory(originalSlot.category, disallowedCategories)) {
+      replacement = { ...originalSlot, slot: disruption.slot };
+      fixes.push('disallowed_category_reverted_to_original');
+    } else {
+      replacement = { ...replacement, category: 'landmark' };
+      fixes.push('disallowed_category_forced_landmark');
+    }
+  }
+
+  if (disruption.slot === 'evening' && toLowerString(replacement.category) === 'museum') {
+    if (originalSlot && toLowerString(originalSlot.category) !== 'museum') {
+      replacement = { ...originalSlot, slot: disruption.slot };
+      fixes.push('evening_museum_reverted_to_original');
+    } else {
+      replacement = { ...replacement, category: 'landmark' };
+      fixes.push('evening_museum_forced_landmark');
+    }
+  }
+
+  const slotsByName = new Map<SlotName, any>();
+  for (const slotName of REQUIRED_SLOTS) {
+    const fromReference = targetDaySlots.find(
+      (slot) => normalizeSlotName((slot as Record<string, unknown>)?.slot) === slotName
+    );
+    slotsByName.set(
+      slotName,
+      fromReference ? { ...fromReference, slot: slotName } : buildSafePlaceholderSlot(disruption.day, slotName)
+    );
+  }
+  slotsByName.set(disruption.slot, { ...replacement, slot: disruption.slot });
+
+  const normalizedSlots = REQUIRED_SLOTS.map((slotName) => {
+    const slot = slotsByName.get(slotName) ?? buildSafePlaceholderSlot(disruption.day, slotName);
+    return {
+      ...slot,
+      slot: slotName,
+      estimated_cost: toFiniteNumber(slot.estimated_cost, 0),
+      duration_minutes: Math.max(15, Math.round(toFiniteNumber(slot.duration_minutes, 90))),
+      coordinates:
+        typeof slot.coordinates === 'object' && slot.coordinates !== null
+          ? slot.coordinates
+          : { lat: 0, lng: 0 },
+      category: typeof slot.category === 'string' && slot.category.trim() ? slot.category : 'landmark',
+      attraction_name:
+        typeof slot.attraction_name === 'string' && slot.attraction_name.trim()
+          ? slot.attraction_name
+          : buildSafePlaceholderSlot(disruption.day, slotName).attraction_name,
+      attraction_id:
+        typeof slot.attraction_id === 'string' && slot.attraction_id.trim()
+          ? slot.attraction_id
+          : buildSafePlaceholderSlot(disruption.day, slotName).attraction_id,
+    };
+  });
+
+  const seenIds = new Set<string>();
+  for (let i = 0; i < normalizedSlots.length; i += 1) {
+    const slot = normalizedSlots[i];
+    const id = toLowerString(slot.attraction_id);
+    if (!id) continue;
+    if (!seenIds.has(id)) {
+      seenIds.add(id);
+      continue;
+    }
+    const replacementSlot = buildSafePlaceholderSlot(disruption.day, slot.slot as SlotName);
+    normalizedSlots[i] = {
+      ...replacementSlot,
+      attraction_id: `${replacementSlot.attraction_id}-${i + 1}`,
+    };
+    fixes.push('duplicate_attraction_id_fixed');
+    seenIds.add(toLowerString(normalizedSlots[i].attraction_id));
+  }
+
+  const disruptedSlot = normalizedSlots.find((slot) => slot.slot === disruption.slot);
+  if (disruptedSlot && isDisallowedCategory(disruptedSlot.category, disallowedCategories)) {
+    const fallback: any = originalSlot && !isDisallowedCategory(originalSlot.category, disallowedCategories)
+      ? { ...originalSlot, slot: disruption.slot }
+      : { ...buildSafePlaceholderSlot(disruption.day, disruption.slot), category: 'landmark' };
+    const idx = normalizedSlots.findIndex((slot) => slot.slot === disruption.slot);
+    normalizedSlots[idx] = {
+      ...fallback,
+      slot: disruption.slot,
+      estimated_cost: toFiniteNumber(fallback.estimated_cost, 0),
+      duration_minutes: Math.max(15, Math.round(toFiniteNumber(fallback.duration_minutes, 90))),
+      coordinates:
+        typeof fallback.coordinates === 'object' && fallback.coordinates !== null
+          ? fallback.coordinates
+          : { lat: 0, lng: 0 },
+      vibe_note:
+        typeof fallback.attraction_name === 'string'
+          ? `${fallback.attraction_name} is a great stop for this slot.`
+          : `${normalizedSlots[idx].attraction_name} is a great stop for this slot.`,
+    };
+    fixes.push('disallowed_category_post_validation_fixed');
+  }
+
+  for (const slot of normalizedSlots) {
+    sanitizeVibeNoteForSlot(slot, normalizedSlots, fixes);
+  }
+
+  const dayCostEstimate = normalizedSlots.reduce(
+    (sum, slot) => sum + toFiniteNumber(slot.estimated_cost, 0),
+    0
+  );
+
+  const strictDays = referenceDays.map((day, index) => {
+    if (index !== targetDayIndex) return cloneRecord(day);
+    return {
+      ...cloneRecord(day),
+      day: disruption.day,
+      slots: normalizedSlots,
+      day_cost_estimate: dayCostEstimate,
+    };
+  });
+
+  const totalCost = strictDays.reduce(
+    (sum, day) => sum + toFiniteNumber((day as Record<string, unknown>)?.day_cost_estimate, 0),
+    0
+  );
+
+  return {
+    itinerary: {
+      ...cloneRecord(candidateItinerary ?? {}),
+      ...reference,
+      days: strictDays,
+      total_cost_estimate: totalCost,
+    },
+    fixes,
+  };
+}
+
+function buildFallbackSlotFromAttraction(
+  attraction: any,
+  slot: 'morning' | 'afternoon' | 'evening'
+): FallbackSlot | null {
+  if (!attraction?.id) return null;
+
+  return {
+    slot,
+    attraction_id: attraction.id,
+    attraction_name: attraction.name ?? attraction.id,
+    category: attraction?.category?.name ?? attraction?.category ?? 'general',
+    estimated_cost:
+      typeof attraction?.estimated_cost === 'number'
+        ? attraction.estimated_cost
+        : typeof attraction?.avgCost === 'number'
+          ? attraction.avgCost
+          : 0,
+    duration_minutes:
+      typeof attraction?.avgDurationMinutes === 'number'
+        ? attraction.avgDurationMinutes
+        : typeof attraction?.duration_minutes === 'number'
+          ? attraction.duration_minutes
+          : 90,
+    coordinates: {
+      lat: typeof attraction?.latitude === 'number' ? attraction.latitude : 0,
+      lng: typeof attraction?.longitude === 'number' ? attraction.longitude : 0,
+    },
+    vibe_note: 'auto-generated fallback',
+  };
+}
+
+function buildPlannerGraphFallbackItinerary(
+  fallbackClusters: any[],
+  attractions: any[],
+  budgetOutput: any,
+  disruption?: {
+    day: number;
+    slot: 'morning' | 'afternoon' | 'evening';
+  }
+) {
+  const attractionById = new Map(
+    attractions
+      .filter((attraction) => attraction?.id)
+      .map((attraction) => [attraction.id, attraction])
+  );
+
+  const days = fallbackClusters
+    .map((day: any) => {
+      const slots = Array.isArray(day?.slots)
+        ? day.slots
+            .map((slot: any) => {
+              const attractionId = slot?.attractionId ?? slot?.attraction_id ?? slot?.id;
+              const attraction = attractionById.get(attractionId);
+              const slotName = slot?.slot;
+              if (
+                !attraction ||
+                (slotName !== 'morning' && slotName !== 'afternoon' && slotName !== 'evening')
+              ) {
+                return null;
+              }
+
+              return buildFallbackSlotFromAttraction(attraction, slotName);
+            })
+            .filter(Boolean)
+        : [];
+
+      return {
+        day: typeof day?.day === 'number' ? day.day : 1,
+        date_label: `Day ${typeof day?.day === 'number' ? day.day : 1}`,
+        cluster_area: day?.clusterCenter ?? day?.cluster_center ?? day?.cluster_area ?? 'City Center',
+        slots,
+        day_cost_estimate: slots.reduce(
+          (sum: number, slot: any) => sum + (typeof slot?.estimated_cost === 'number' ? slot.estimated_cost : 0),
+          0
+        ),
+      };
+    })
+    .filter((day) => day.slots.length > 0);
+
+  if (disruption && !days.some((day) => day.day === disruption.day)) {
+    const fallbackAttraction = attractions[0];
+    const fallbackSlot = buildFallbackSlotFromAttraction(fallbackAttraction, disruption.slot);
+    if (fallbackSlot) {
+      days.push({
+        day: disruption.day,
+        date_label: `Day ${disruption.day}`,
+        cluster_area: fallbackAttraction?.name ?? 'City Center',
+        slots: [fallbackSlot],
+        day_cost_estimate: fallbackSlot.estimated_cost,
+      });
+    }
+  }
+
+  return {
+    days,
+    total_cost_estimate:
+      days.reduce((sum, day) => sum + day.day_cost_estimate, 0) ||
+      (budgetOutput as any)?.totalBudget ||
+      0,
+  };
+}
+
 
 function isTokenLimitError(error: unknown) {
   const baseError =
@@ -223,10 +617,29 @@ export async function runPlannerGraph(
   userProfile: UserProfile,
   context: PipelineContext = {}
 ) {
+
+  // 🔥 REPLAN: detect mode
+  const isReplan = !!context.disruption && !!context.existingItinerary;
+  const disruption = context.disruption;
+  const existingItinerary = context.existingItinerary;
+  const disruptedSlotContext = isReplan
+    ? getDisruptedSlotContext(existingItinerary as PlannerItineraryRecord, disruption)
+    : undefined;
+  const disruptionPolicy = isReplan
+    ? deriveDisruptionPolicy(disruption, disruptedSlotContext)
+    : undefined;
+  const preservedAttractionExclusions = isReplan
+    ? getPreservedAttractionExclusions(existingItinerary as PlannerItineraryRecord, disruption)
+    : undefined;
+  const effectiveUserProfile = isReplan
+    ? buildDisruptionAwareProfile(userProfile, disruptionPolicy)
+    : userProfile;
+
   const primaryLimit = parsePositiveInt(
     process.env.AGENT_ATTRACTION_LIMIT,
-    20 // reduced from 30 → token safety
+    20
   );
+  const replanCandidateLimit = 6;
 
   const retryLimit = parsePositiveInt(
     process.env.AGENT_RETRY_ATTRACTION_LIMIT,
@@ -236,37 +649,70 @@ export async function runPlannerGraph(
   // 1. CITY
   const city = await runStage(context, 'db_find_city', async () =>
     prisma.city.findFirst({
-      where: { name: userProfile.city! },
+      where: { name: effectiveUserProfile.city! },
     })
   );
 
   if (!city) {
     throw new PipelineStageError(
       'db_find_city',
-      new Error(`City ${userProfile.city} not found`),
+      new Error(`City ${effectiveUserProfile.city} not found`),
       context.requestId
     );
   }
 
   // 2. ATTRACTIONS
-  const attractions = await runStage(context, 'db_load_attractions', async () =>
-    prisma.attraction.findMany({
-      where: { cityId: city.id },
-      include: { category: true },
-    })
+  console.log("🔥 CALLING getEnhancedAttractions", {
+    cityId: city.id,
+    cityName: city.name
+  });
+
+  const attractions = await getEnhancedAttractions(
+    city.id,
+    city.name,
+    "top tourist attractions"
   );
+
+  console.log("🔥 ATTRACTIONS RECEIVED", {
+    count: attractions.length
+  });
 
   // 3. PRE-FILTER
   const filteredAttractions = await runStage(context, 'pre_filter', async () =>
-    attractions.filter((a) => {
-      if (userProfile.avoid?.includes(a.category.name)) return false;
-      if (userProfile.mobilityNeeds && a.intensityLevel > 3) return false;
+    filterAndRankAttractionsForDisruption(
+      attractions.filter((a) => {
+      if (attractionMatchesAvoidTerms(a, effectiveUserProfile.avoid ?? [])) return false;
+      if (!isAttractionAllowedByDisruptionPolicy(a, disruptionPolicy)) return false;
+      if (effectiveUserProfile.mobilityNeeds && (a as any).intensityLevel > 3) return false;
       return true;
-    })
+      }),
+      isReplan ? disruptionPolicy : undefined,
+      preservedAttractionExclusions
+    )
   );
 
+  if (isReplan && disruptionPolicy) {
+    logPipeline(context.requestId, 'replan_constraints', 'success', {
+      disruptedSlotContext,
+      derivedAvoidTerms: disruptionPolicy.avoidTerms,
+      derivedAvoidTags: disruptionPolicy.avoidTags,
+      disallowedCategories: disruptionPolicy.disallowedCategories,
+      preferredCategories: disruptionPolicy.preferredCategories,
+      allowedIndoorOutdoor: disruptionPolicy.allowedIndoorOutdoor,
+      requireAccessible: disruptionPolicy.requireAccessible,
+      preferNearby: disruptionPolicy.preferNearby,
+      rationale: disruptionPolicy.rationale,
+      excludedAttractionIds: preservedAttractionExclusions?.attractionIds ?? [],
+      excludedAttractionNames: preservedAttractionExclusions?.attractionNames ?? [],
+      filteredAttractions: attractions.length - filteredAttractions.length,
+    });
+  }
+
   // 4. LIMIT FOR TOKEN SAFETY
-  let workingAttractions = filteredAttractions.slice(0, primaryLimit);
+  let workingAttractions = filteredAttractions.slice(
+    0,
+    isReplan ? Math.min(primaryLimit, replanCandidateLimit) : primaryLimit
+  );
 
   if (workingAttractions.length < filteredAttractions.length) {
     logPipeline(context.requestId, 'agent_input_trim', 'success', {
@@ -277,69 +723,144 @@ export async function runPlannerGraph(
 
   // 5. BUDGET (TS)
   const budgetOutput = await runStage(context, 'process_budget', async () =>
-    calculateBudget(userProfile, filteredAttractions)
+    calculateBudget(effectiveUserProfile, filteredAttractions)
   );
 
   // 6. CLUSTERING (TS)
-  const clusters = await runStage(context, 'process_clustering', async () =>
-    clusterByProximity(userProfile, filteredAttractions, budgetOutput)
+  let clusters = await runStage(context, 'process_clustering', async () =>
+    clusterByProximity(effectiveUserProfile, filteredAttractions, budgetOutput)
   );
 
   // 7. DIVERSITY (TS)
-  const adjustedClusters = await runStage(context, 'process_diversity', async () =>
-    ensureDiversity(userProfile, clusters, filteredAttractions)
+  let adjustedClusters = await runStage(context, 'process_diversity', async () =>
+    ensureDiversity(effectiveUserProfile, clusters, filteredAttractions)
   );
+
+  let preservedDays: PlannerDayLike[] = [];
+  let replanStartDay = 1;
+  let toReplan: PlannerDayLike[] = [];
+
+  if (isReplan) {
+    const split = splitItineraryForReplan(existingItinerary as PlannerItineraryRecord, disruption!);
+    preservedDays = split.preservedDays;
+    toReplan = split.toReplan;
+    replanStartDay = split.replanStartDay;
+    const allowedCandidateIds = new Set(
+      workingAttractions
+        .map((attraction: any) => attraction?.id ?? attraction?.attraction_id)
+        .filter((id: unknown): id is string => typeof id === 'string' && id.trim().length > 0)
+    );
+
+    clusters = clusters
+      .filter((cluster) => cluster.day === disruption!.day)
+      .map((cluster) => ({
+        ...cluster,
+        slots: cluster.slots.filter(
+          (slot) =>
+            slot.slot === disruption!.slot &&
+            allowedCandidateIds.has(
+              String((slot as any).attractionId ?? (slot as any).attraction_id ?? (slot as any).id)
+            )
+        ),
+      }))
+      .filter((cluster) => cluster.slots.length > 0);
+    adjustedClusters = {
+      ...adjustedClusters,
+      adjustedClusters: adjustedClusters.adjustedClusters
+        .filter((cluster) => cluster.day === disruption!.day)
+        .map((cluster) => ({
+          ...cluster,
+          slots: cluster.slots.filter(
+            (slot: any) =>
+              slot.slot === disruption!.slot &&
+              allowedCandidateIds.has(String(slot?.attractionId ?? slot?.attraction_id ?? slot?.id))
+          ),
+        }))
+        .filter((cluster) => cluster.slots.length > 0),
+      flaggedDays: adjustedClusters.flaggedDays.filter((day) => day.day === disruption!.day),
+    };
+
+    logPipeline(context.requestId, 'replan_split', 'success', {
+      preservedDayCount: preservedDays.length,
+      replanDayCount: toReplan.length,
+      replanStartDay,
+      targetSlot: disruption!.slot,
+    });
+  }
 
   // 8. VIBE AGENT (LLM)
   let vibeOutput: any[] = [];
   let tokensUsed = 0;
+
   const executionMeta: PipelineExecutionMeta = {
     vibeFallback: false,
     reconcilerFallback: false,
     vibeRetryCount: 0,
     reconcilerRetryCount: 0,
+    reconcilerCorrectedVibeNotes: 0,
     usedFallback: false,
     retryCount: 0,
     llmSuccess: true,
   };
 
-  try {
-    const vibeResult = await runStage(context, 'agent_vibe', async () =>
-      vibeAgent(userProfile, workingAttractions)
-    );
-    vibeOutput = vibeResult.vibeOutput;
-    tokensUsed += vibeResult.tokensUsed;
-    executionMeta.vibeFallback = vibeResult.meta.usedFallback;
-    executionMeta.vibeRetryCount += vibeResult.meta.retryCount;
-    logPipeline(context.requestId, 'agent_vibe_outcome', 'success', {
-      usedFallback: vibeResult.meta.usedFallback,
-      retryCount: vibeResult.meta.retryCount,
-      llmSuccess: vibeResult.meta.llmSuccess,
+  if (isReplan) {
+    vibeOutput = workingAttractions
+      .map((attraction: any) => {
+        const attractionId = attraction?.id ?? attraction?.attraction_id;
+        if (typeof attractionId !== 'string' || attractionId.trim().length === 0) return null;
+        return {
+          attraction_id: attractionId,
+          vibe_fit_score: 1,
+          reason: 'replan_candidate',
+        };
+      })
+      .filter(Boolean) as any[];
+    logPipeline(context.requestId, 'agent_vibe_skipped', 'success', {
+      reason: 'replan_mode_single_llm',
+      candidateCount: vibeOutput.length,
     });
-  } catch (error) {
-    if (!isTokenLimitError(error)) throw error;
+  } else {
+    try {
+      const vibeResult = await runStage(context, 'agent_vibe', async () =>
+        vibeAgent(effectiveUserProfile, workingAttractions)
+      );
 
-    workingAttractions = filteredAttractions.slice(0, retryLimit);
+      vibeOutput = vibeResult.vibeOutput;
+      tokensUsed += vibeResult.tokensUsed;
 
-    logPipeline(context.requestId, 'agent_retry_plan', 'success', {
-      retryForStage: 'agent_vibe',
-      reason: 'token_limit',
-      sentToAgents: workingAttractions.length,
-    });
+      executionMeta.vibeFallback = vibeResult.meta.usedFallback;
+      executionMeta.vibeRetryCount += vibeResult.meta.retryCount;
 
-    const vibeRetryResult = await runStage(context, 'agent_vibe_retry', async () =>
-      vibeAgent(userProfile, workingAttractions)
-    );
-    vibeOutput = vibeRetryResult.vibeOutput;
-    tokensUsed += vibeRetryResult.tokensUsed;
-    executionMeta.vibeFallback = vibeRetryResult.meta.usedFallback;
-    executionMeta.vibeRetryCount += vibeRetryResult.meta.retryCount;
-    logPipeline(context.requestId, 'agent_vibe_outcome', 'success', {
-      usedFallback: vibeRetryResult.meta.usedFallback,
-      retryCount: vibeRetryResult.meta.retryCount,
-      llmSuccess: vibeRetryResult.meta.llmSuccess,
-      sourceStage: 'agent_vibe_retry',
-    });
+      logPipeline(context.requestId, 'agent_vibe_outcome', 'success', {
+        usedFallback: vibeResult.meta.usedFallback,
+        retryCount: vibeResult.meta.retryCount,
+        llmSuccess: vibeResult.meta.llmSuccess,
+      });
+
+    } catch (error) {
+      if (!isTokenLimitError(error)) throw error;
+
+      workingAttractions = filteredAttractions.slice(0, retryLimit);
+      logPipeline(context.requestId, 'agent_retry_plan', 'success', {
+        retryForStage: 'agent_vibe',
+        reason: 'token_limit',
+        sentToAgents: workingAttractions.length,
+      });
+
+      const vibeRetryResult = await runStage(context, 'agent_vibe_retry', async () =>
+        vibeAgent(effectiveUserProfile, workingAttractions)
+      );
+      vibeOutput = vibeRetryResult.vibeOutput;
+      tokensUsed += vibeRetryResult.tokensUsed;
+      executionMeta.vibeFallback = vibeRetryResult.meta.usedFallback;
+      executionMeta.vibeRetryCount += vibeRetryResult.meta.retryCount;
+      logPipeline(context.requestId, 'agent_vibe_outcome', 'success', {
+        usedFallback: vibeRetryResult.meta.usedFallback,
+        retryCount: vibeRetryResult.meta.retryCount,
+        llmSuccess: vibeRetryResult.meta.llmSuccess,
+        sourceStage: 'agent_vibe_retry',
+      });
+    }
   }
 
   // 9. RECONCILER (LLM)
@@ -348,22 +869,34 @@ export async function runPlannerGraph(
   try {
     const reconcilerResult = await runStage(context, 'agent_reconciler', async () =>
       reconcilerAgent(
-        userProfile,
+        effectiveUserProfile,
         vibeOutput,
         budgetOutput,
         clusters,
         adjustedClusters,
-        filteredAttractions
+        isReplan ? workingAttractions : filteredAttractions,
+        isReplan
+          ? {
+              existingItinerary,
+              disruption,
+              preservedDays,
+              replanStartDay,
+              disruptionPolicy,
+            }
+          : undefined
       )
     );
     itinerary = reconcilerResult.itinerary;
     tokensUsed += reconcilerResult.tokensUsed;
     executionMeta.reconcilerFallback = reconcilerResult.meta.usedFallback;
     executionMeta.reconcilerRetryCount += reconcilerResult.meta.retryCount;
+    const correctedVibeNotes = reconcilerResult.meta.correctedVibeNotes ?? 0;
+    executionMeta.reconcilerCorrectedVibeNotes += correctedVibeNotes;
     logPipeline(context.requestId, 'agent_reconciler_outcome', 'success', {
       usedFallback: reconcilerResult.meta.usedFallback,
       retryCount: reconcilerResult.meta.retryCount,
       llmSuccess: reconcilerResult.meta.llmSuccess,
+      correctedVibeNotes,
     });
   } catch (error) {
     console.error('[reconciler fallback triggered]');
@@ -372,16 +905,12 @@ export async function runPlannerGraph(
       ? (adjustedClusters as any).adjustedClusters
       : [];
 
-    itinerary = {
-      days: fallbackClusters.map((day: any) => ({
-        day: day.day,
-        slots: day.slots.map((slot: any) => ({
-          ...slot,
-          vibe_note: 'auto-generated fallback',
-        })),
-      })),
-      total_cost_estimate: (budgetOutput as any)?.totalBudget || 0,
-    };
+    itinerary = buildPlannerGraphFallbackItinerary(
+      fallbackClusters,
+      filteredAttractions,
+      budgetOutput,
+      disruption
+    );
     executionMeta.reconcilerFallback = true;
     logPipeline(context.requestId, 'agent_reconciler_outcome', 'success', {
       usedFallback: true,
@@ -399,17 +928,48 @@ export async function runPlannerGraph(
     );
   }
 
+  if (isReplan) {
+    const strictReplanResult = buildStrictReplanItinerary(
+      existingItinerary as PlannerItineraryRecord,
+      itinerary as PlannerItineraryRecord,
+      disruption as { day: number; slot: SlotName },
+      disruptionPolicy?.disallowedCategories ?? []
+    );
+    itinerary = strictReplanResult.itinerary;
+    console.log(
+      `[replan] validation_applied ${JSON.stringify({
+        requestId: context.requestId ?? 'n/a',
+        day: disruption?.day,
+        slot: disruption?.slot,
+      })}`
+    );
+    console.log(
+      `[replan] fixes ${JSON.stringify({
+        requestId: context.requestId ?? 'n/a',
+        fixes: strictReplanResult.fixes,
+      })}`
+    );
+  } else {
+    itinerary = normalizeMergedItinerary(itinerary as PlannerItineraryRecord);
+  }
+
   // 10. STORE
-  await runStage(context, 'db_store_itinerary', async () =>
-    prisma.itinerary.create({
-      data: {
-        cityId: city.id,
-        userProfileJson: userProfile as any,
-        itineraryJson: itinerary as any,
-        totalCostEstimate: itinerary.total_cost_estimate || 0,
-      },
-    })
-  );
+  if (!isReplan) {
+    const storedItinerary = await runStage(context, 'db_store_itinerary', async () =>
+      prisma.itinerary.create({
+        data: {
+          cityId: city.id,
+          userProfileJson: userProfile as any,
+          itineraryJson: itinerary as any,
+          totalCostEstimate: itinerary.total_cost_estimate || 0,
+        },
+      })
+    );
+
+    logPipeline(context.requestId, 'db_store_itinerary_id', 'success', {
+      itineraryId: storedItinerary.id,
+    });
+  }
 
   executionMeta.usedFallback =
     executionMeta.vibeFallback || executionMeta.reconcilerFallback;
@@ -421,5 +981,14 @@ export async function runPlannerGraph(
     itinerary,
     tokensUsed,
     meta: executionMeta,
+    replanContext: isReplan
+      ? {
+          disruption,
+          disruptedSlot: disruptedSlotContext,
+          policy: disruptionPolicy,
+        }
+      : undefined,
   };
 }
+
+

@@ -2,11 +2,7 @@ import groq, { GROQ_MODEL } from '../lib/groq';
 import { UserProfile } from '@vibetrip/shared/types/userProfile';
 import { callWithRetry } from '../utils/retry';
 import {
-  compactAttractionsForPrompt,
-  compactDiversityOutputForPrompt,
-  compactLogisticsOutputForPrompt,
   compactUserProfileForPrompt,
-  compactVibeOutputForPrompt,
 } from './promptData';
 
 type AnyRecord = Record<string, unknown>;
@@ -42,6 +38,7 @@ type AgentExecutionMeta = {
   usedFallback: boolean;
   retryCount: number;
   llmSuccess: boolean;
+  correctedVibeNotes: number;
 };
 
 export type ReconcilerAgentResult = {
@@ -60,6 +57,62 @@ type AttractionSnapshot = {
 };
 
 const SLOT_ORDER: SlotName[] = ['morning', 'afternoon', 'evening'];
+
+const CATEGORY_KEYWORDS: Record<string, string[]> = {
+  beach: ['beach', 'coast', 'shore', 'sand', 'sea', 'seaside', 'waterfront', 'waves'],
+  entertainment: ['entertainment', 'show', 'theatre', 'theater', 'nightlife', 'casino', 'arcade', 'mall'],
+  food: ['food', 'restaurant', 'cafe', 'cuisine', 'culinary', 'dining', 'seafood', 'tasting'],
+  landmark: [
+    'landmark',
+    'heritage',
+    'historic',
+    'history',
+    'fort',
+    'palace',
+    'gateway',
+    'monument',
+    'architecture',
+    'quarter',
+    'cathedral',
+    'church',
+    'basilica',
+    'chapel',
+    'temple',
+    'promenade',
+  ],
+  market: ['market', 'bazaar', 'flea', 'shopping', 'stalls', 'vendors', 'crafts', 'souvenir'],
+  museum: ['museum', 'gallery', 'exhibit', 'exhibition', 'art', 'archive', 'collection', 'heritage'],
+  nature: [
+    'nature',
+    'waterfall',
+    'falls',
+    'dam',
+    'lake',
+    'river',
+    'forest',
+    'wildlife',
+    'garden',
+    'park',
+    'viewpoint',
+    'trail',
+    'hill',
+    'spice',
+  ],
+  temple: ['temple', 'shrine', 'church', 'cathedral', 'mosque', 'chapel', 'basilica'],
+  viewpoint: ['viewpoint', 'view', 'lookout', 'hill', 'cliff', 'scenic', 'panorama', 'sunset'],
+};
+
+const ATTRACTION_TOKEN_STOP_WORDS = new Set([
+  'and',
+  'the',
+  'with',
+  'walk',
+  'tour',
+  'goa',
+  'old',
+  'new',
+  'of',
+]);
 
 function extractTokensUsed(response: any) {
   const usage = response?.usage;
@@ -85,6 +138,114 @@ function safeString(value: unknown, fallback: string) {
   if (typeof value !== 'string') return fallback;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : fallback;
+}
+
+function isLabelLikeVibeNote(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  if (/[.!?]/.test(trimmed)) return false;
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  return words.length <= 4;
+}
+
+function normalizeForMatching(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
+}
+
+function getAttractionNameTokens(attractionName: string) {
+  return normalizeForMatching(attractionName)
+    .split(/\s+/)
+    .filter((token) => token.length >= 4 && !ATTRACTION_TOKEN_STOP_WORDS.has(token));
+}
+
+function getCategoryKeywords(category: string) {
+  const normalizedCategory = normalizeForMatching(category).trim();
+  return CATEGORY_KEYWORDS[normalizedCategory] ?? [normalizedCategory].filter(Boolean);
+}
+
+export function vibeNoteMatchesCategory(slot: {
+  attraction_name: string;
+  category: string;
+  vibe_note: string;
+}) {
+  const note = normalizeForMatching(slot.vibe_note);
+  const attractionTokens = getAttractionNameTokens(slot.attraction_name);
+  const categoryKeywords = getCategoryKeywords(slot.category);
+  const mentionedAttraction = attractionTokens.some((token) => note.includes(token));
+  const mentionedOwnCategory = categoryKeywords.some((keyword) => note.includes(keyword));
+
+  if (!mentionedAttraction && !mentionedOwnCategory) return false;
+
+  for (const [otherCategory, otherKeywords] of Object.entries(CATEGORY_KEYWORDS)) {
+    if (otherCategory === normalizeForMatching(slot.category).trim()) continue;
+    const mentionsOtherCategory = otherKeywords.some((keyword) => note.includes(keyword));
+    if (mentionsOtherCategory && !mentionedOwnCategory && !mentionedAttraction) return false;
+    if (mentionsOtherCategory && !mentionedOwnCategory) return false;
+  }
+
+  return true;
+}
+
+export function buildNaturalVibeNote(
+  attractionName: string,
+  category: string,
+  candidate?: string
+) {
+  const trimmedCandidate = typeof candidate === 'string' ? candidate.trim() : '';
+  if (trimmedCandidate && !isLabelLikeVibeNote(trimmedCandidate)) {
+    const candidateSlot = {
+      attraction_name: attractionName,
+      category,
+      vibe_note: trimmedCandidate,
+    };
+    if (vibeNoteMatchesCategory(candidateSlot)) {
+      return trimmedCandidate;
+    }
+    return buildGroundedVibeNote(attractionName, category);
+  }
+
+  let note: string;
+  if (trimmedCandidate) {
+    note = `${attractionName} is a good ${category} pick for this slot, with a ${trimmedCandidate.toLowerCase()} vibe that fits the trip.`;
+    return vibeNoteMatchesCategory({
+      attraction_name: attractionName,
+      category,
+      vibe_note: note,
+    })
+      ? note
+      : buildGroundedVibeNote(attractionName, category);
+  }
+
+  note = `${attractionName} is a good ${category} pick for this slot and fits the overall pace and mood of the day.`;
+  return vibeNoteMatchesCategory({
+    attraction_name: attractionName,
+    category,
+    vibe_note: note,
+  })
+    ? note
+    : buildGroundedVibeNote(attractionName, category);
+}
+
+function buildGroundedVibeNote(attractionName: string, category: string) {
+  const normalizedCategory = category.toLowerCase();
+
+  if (normalizedCategory === 'market') {
+    return `${attractionName} is a market stop for browsing local stalls, crafts, and easygoing street energy. It fits this slot without drifting away from the shopping-focused activity.`;
+  }
+  if (normalizedCategory === 'museum') {
+    return `${attractionName} is a museum visit centered on exhibits, art, and local context. It gives this slot a grounded indoor culture break.`;
+  }
+  if (normalizedCategory === 'beach') {
+    return `${attractionName} is a beach stop for sea views, sand, and a slower coastal pause. It fits this slot as a relaxed waterfront activity.`;
+  }
+  if (normalizedCategory === 'landmark') {
+    return `${attractionName} is a landmark visit with heritage, architecture, and place-specific history. It gives this slot a clear sightseeing focus.`;
+  }
+  if (normalizedCategory === 'nature') {
+    return `${attractionName} is a nature stop shaped around outdoor scenery and a slower open-air break. It fits this slot as a calm natural escape.`;
+  }
+
+  return `${attractionName} is a ${category} stop that fits this slot and the day plan. The visit is grounded in this specific attraction rather than a generic activity.`;
 }
 
 function extractCoordinates(value: unknown): { lat: number; lng: number } | null {
@@ -137,7 +298,11 @@ function buildAttractionIndex(attractions: any[]) {
     const coordinates = extractCoordinates(row);
     if (!coordinates) continue;
 
-    const avgCost = toFiniteNumber(row.avgCost) ?? toFiniteNumber(row.avg_cost) ?? 0;
+    const avgCost =
+      toFiniteNumber(row.avgCost) ??
+      toFiniteNumber(row.avg_cost) ??
+      toFiniteNumber(row.estimated_cost) ??
+      300;
     const durationMinutes =
       toFiniteNumber(row.avgDurationMinutes) ??
       toFiniteNumber(row.duration_minutes) ??
@@ -148,7 +313,7 @@ function buildAttractionIndex(attractions: any[]) {
       id,
       name: safeString(row.name ?? row.attraction_name, id),
       category: extractCategoryName(row.category),
-      avgCost: Math.max(0, avgCost),
+      avgCost: Math.max(1, avgCost),
       durationMinutes: Math.max(15, Math.round(durationMinutes)),
       coordinates,
     });
@@ -282,7 +447,7 @@ function buildSlotFromAttraction(
     estimated_cost: attraction.avgCost,
     duration_minutes: attraction.durationMinutes,
     coordinates: attraction.coordinates,
-    vibe_note: safeString(vibeReason, 'A great match for your travel vibe.'),
+    vibe_note: buildNaturalVibeNote(attraction.name, attraction.category, vibeReason),
   };
 }
 
@@ -290,7 +455,10 @@ function buildFallbackItinerary(
   userProfile: UserProfile,
   vibeOutput: any[],
   logisticsOutput: any[],
-  attractions: any[]
+  attractions: any[],
+  options?: {
+    preserveDayNumbers?: boolean;
+  }
 ): ReconcilerItinerary {
   const attractionsById = buildAttractionIndex(attractions);
   const vibeReasonsById = buildVibeReasonIndex(vibeOutput);
@@ -327,7 +495,7 @@ function buildFallbackItinerary(
       const slot = slots[slotIndex];
       if (typeof slot !== 'object' || slot === null) continue;
       const slotRecord = slot as AnyRecord;
-      const attractionId = slotRecord.attraction_id ?? slotRecord.id;
+      const attractionId = slotRecord.attraction_id ?? slotRecord.attractionId ?? slotRecord.id;
       if (typeof attractionId !== 'string' || usedAttractionIds.has(attractionId)) continue;
 
       const attraction = attractionsById.get(attractionId);
@@ -362,7 +530,9 @@ function buildFallbackItinerary(
     });
   }
 
-  const targetDayCount = Math.min(7, Math.max(days.length, inferTripDays(userProfile)));
+  const targetDayCount = options?.preserveDayNumbers
+    ? Math.max(days.length, logisticsDays.length)
+    : Math.min(7, Math.max(days.length, inferTripDays(userProfile)));
   let nextDayNumber = days.length > 0 ? Math.max(...days.map((day) => day.day)) + 1 : 1;
   let cursor = 0;
 
@@ -414,8 +584,10 @@ function buildFallbackItinerary(
     .sort((a, b) => a.day - b.day)
     .map((day, index) => ({
       ...day,
-      day: index + 1,
-      date_label: dateLabelForDay(userProfile.arrivalDate, index + 1),
+      day: options?.preserveDayNumbers ? day.day : index + 1,
+      date_label: options?.preserveDayNumbers
+        ? dateLabelForDay(userProfile.arrivalDate, day.day)
+        : dateLabelForDay(userProfile.arrivalDate, index + 1),
       day_cost_estimate: day.slots.reduce((sum, slot) => sum + slot.estimated_cost, 0),
     }));
 
@@ -433,13 +605,17 @@ function buildFallbackItinerary(
 function normalizeParsedItinerary(
   parsed: unknown,
   fallback: ReconcilerItinerary,
-  attractions: any[]
+  attractions: any[],
+  options?: {
+    preserveDayNumbers?: boolean;
+  }
 ) {
   if (typeof parsed !== 'object' || parsed === null) return null;
   const row = parsed as AnyRecord;
   const daysRaw = row.days;
   if (!Array.isArray(daysRaw)) return null;
   const attractionsById = buildAttractionIndex(attractions);
+  let correctedVibeNotes = 0;
 
   const days: ReconcilerDay[] = daysRaw
     .map((dayItem, dayIndex) => {
@@ -460,19 +636,37 @@ function normalizeParsedItinerary(
             fallbackSlot?.attraction_id ?? `slot-${dayIndex + 1}-${slotIndex + 1}`
           );
           const canonicalAttraction = attractionsById.get(attractionId);
+          const attractionName =
+            canonicalAttraction?.name ??
+            safeString(
+              slotRecord.attraction_name,
+              fallbackSlot?.attraction_name ?? `Activity ${slotIndex + 1}`
+            );
+          const category =
+            canonicalAttraction?.category ??
+            safeString(slotRecord.category, fallbackSlot?.category ?? 'general');
+          const incomingVibeNote = safeString(
+            slotRecord.vibe_note,
+            fallbackSlot?.vibe_note ?? ''
+          );
+          const normalizedVibeNote = buildNaturalVibeNote(
+            attractionName,
+            category,
+            incomingVibeNote || fallbackSlot?.vibe_note
+          );
+
+          if (
+            incomingVibeNote &&
+            normalizeForMatching(incomingVibeNote) !== normalizeForMatching(normalizedVibeNote)
+          ) {
+            correctedVibeNotes += 1;
+          }
 
           return {
             slot: normalizeSlotName(slotRecord.slot, slotIndex),
             attraction_id: attractionId,
-            attraction_name:
-              canonicalAttraction?.name ??
-              safeString(
-                slotRecord.attraction_name,
-                fallbackSlot?.attraction_name ?? `Activity ${slotIndex + 1}`
-              ),
-            category:
-              canonicalAttraction?.category ??
-              safeString(slotRecord.category, fallbackSlot?.category ?? 'general'),
+            attraction_name: attractionName,
+            category,
             estimated_cost:
               canonicalAttraction?.avgCost ??
               toFiniteNumber(slotRecord.estimated_cost) ??
@@ -489,10 +683,7 @@ function normalizeParsedItinerary(
                 )
               ),
             coordinates: canonicalAttraction?.coordinates ?? coordinates,
-            vibe_note: safeString(
-              slotRecord.vibe_note,
-              fallbackSlot?.vibe_note ?? 'A great match for your travel vibe.'
-            ),
+            vibe_note: normalizedVibeNote,
           };
         })
         .filter((slot): slot is ReconcilerSlot => Boolean(slot));
@@ -522,7 +713,7 @@ function normalizeParsedItinerary(
     .sort((a, b) => a.day - b.day)
     .map((day, index) => ({
       ...day,
-      day: index + 1,
+      day: options?.preserveDayNumbers ? day.day : index + 1,
       day_cost_estimate: day.slots.reduce((sum, slot) => sum + slot.estimated_cost, 0),
     }));
 
@@ -534,10 +725,13 @@ function normalizeParsedItinerary(
       : computedTotal;
 
   return {
-    city: safeString(row.city, fallback.city),
-    currency: safeString(row.currency, fallback.currency),
-    total_cost_estimate: Math.max(0, totalCost),
-    days: normalizedDays,
+    itinerary: {
+      city: safeString(row.city, fallback.city),
+      currency: safeString(row.currency, fallback.currency),
+      total_cost_estimate: Math.max(0, totalCost),
+      days: normalizedDays,
+    },
+    correctedVibeNotes,
   };
 }
 
@@ -547,8 +741,25 @@ export async function reconcilerAgent(
   budgetOutput: any,
   logisticsOutput: any[],
   diversityOutput: any,
-  attractions: any[]
+  attractions: any[],
+  // 🔥 REPLAN (NEW OPTIONAL PARAMS)
+  options?: {
+    existingItinerary?: any;
+    disruption?: any;
+    preservedDays?: any[];
+    replanStartDay?: number;
+    disruptionPolicy?: {
+      disallowedCategories?: string[];
+      rationale?: string[];
+    };
+  }
 ): Promise<ReconcilerAgentResult> {
+    const isReplan = !!options?.disruption && !!options?.existingItinerary;
+  const disruption = options?.disruption;
+  const existingItinerary = options?.existingItinerary;
+  const preservedDays = options?.preservedDays;
+  const replanStartDay = options?.replanStartDay ?? 1;
+  const disruptionPolicy = options?.disruptionPolicy;
   const maxAttractions = Math.min(
     Number(process.env.AGENT_ATTRACTION_LIMIT ?? 20),
     20
@@ -575,6 +786,17 @@ export async function reconcilerAgent(
         }))
       : [],
   }));
+  const compactCandidates = attractions.slice(0, maxAttractions).map((attraction: any) => ({
+    id: attraction?.id ?? attraction?.attraction_id ?? null,
+    name: attraction?.name ?? attraction?.attraction_name ?? null,
+    category: attraction?.category?.name ?? attraction?.category ?? null,
+    estimated_cost: attraction?.estimated_cost ?? attraction?.avgCost ?? null,
+    duration_minutes: attraction?.avgDurationMinutes ?? attraction?.duration_minutes ?? null,
+    coordinates:
+      typeof attraction?.latitude === 'number' && typeof attraction?.longitude === 'number'
+        ? { lat: attraction.latitude, lng: attraction.longitude }
+        : attraction?.coordinates ?? null,
+  }));
 
   // ✅ COMPRESSED BUDGET (IMPORTANT)
   const compactBudget = {
@@ -583,20 +805,86 @@ export async function reconcilerAgent(
   };
 
   // 🔥 SIMPLIFIED PROMPT (MAJOR TOKEN REDUCTION)
-  const prompt = `
-You are a travel planner.
+    const systemPrompt = `
+You are a deterministic itinerary reconciler.
 
-Build a day-by-day itinerary using given clusters and preferences.
+Your job is NOT to be creative.
+Your job is to strictly assemble a valid itinerary from pre-processed data.
 
-Rules:
-- Respect daily budget cap
-- Prefer high vibe score attractions
-- Maintain slot order: morning, afternoon, evening
+--------------------------------------------------
+
+${isReplan ? `
+A disruption has occurred:
+${JSON.stringify(disruption)}
+
+You are generating ONLY the single disrupted slot that must be replaced.
+
+REPLAN HARD RULES:
+1. Output EXACTLY one day: day ${replanStartDay}.
+2. That day must include EXACTLY one slot: "${disruption?.slot}".
+3. Do NOT create any additional slots.
+4. Use only attraction_ids from provided clusters and candidates.
+5. Respect disallowedCategories from the disruption policy.
+` : ``}
+
+--------------------------------------------------
+
+GLOBAL HARD CONSTRAINTS (STRICT PRIORITY):
+
+1. Budget:
+- Do NOT exceed daily budget cap
+- Do NOT include flagged expensive attractions
+
+2. Must-Visit:
+- Always include mustVisit attractions
+
+3. Vibe:
+- STRICT: Only use attractions with vibe_fit_score >= 0.6
+- If insufficient, then allow attractions with vibe_fit_score >= 0.5
+- NEVER use attractions with vibe_fit_score < 0.5 under any condition
+
+4. Clusters:
+- Follow cluster grouping EXACTLY
+- Do NOT move attractions across days
+- Do NOT select attractions from different cluster areas in the same day
+- All slots in a day must belong to the same cluster
+
+--------------------------------------------------
+
+DATA GROUNDING RULES (CRITICAL):
+
+- You MUST ONLY use attraction_ids from provided clusters
+- DO NOT invent attractions
+- DO NOT change attraction_name
+- DO NOT fabricate cost, category, or coordinates
+- Use given data as source of truth
+- vibe_note must be a natural 1-2 sentence description, not a label, tag, or persona name
+- For each slot, vibe_note MUST directly describe the specific attraction selected for that slot.
+- vibe_note MUST match the attraction category and the actual activity.
+- Do NOT reuse generic vibe_note templates across unrelated attractions.
+- Do NOT mention unrelated places, attractions, landmarks, beaches, markets, temples, or museums.
+- If the attraction is a market, describe market/shopping/stall energy; if it is a landmark, describe heritage/architecture/sightseeing; if it is a museum, describe exhibits/art/culture; if it is a beach, describe coastal/sand/sea activity.
+
+--------------------------------------------------
+
+STRUCTURE RULES:
+
+- Maintain slot order: morning → afternoon → evening
+- Each day MUST contain exactly 3 slots unless strictly impossible
+- Each day must have valid slots based on cluster input
+- Do NOT repeat the same attraction within the same day
+- Do NOT include more than 1 high-cost attraction (>2000) per day
+- Maintain consistent JSON structure
+${isReplan ? '- In replan mode, return exactly 1 slot in the slots array for the disrupted slot only' : ''}
+
+--------------------------------------------------
+
+INPUT DATA:
 
 User:
 ${JSON.stringify(compactProfile)}
 
-Vibe:
+Vibe Scores:
 ${JSON.stringify(compactVibe)}
 
 Budget:
@@ -605,7 +893,19 @@ ${JSON.stringify(compactBudget)}
 Clusters:
 ${JSON.stringify(compactClusters)}
 
-Return ONLY JSON:
+${isReplan ? `
+CANDIDATES:
+${JSON.stringify(compactCandidates)}
+
+Replan starts at day: ${JSON.stringify(replanStartDay)}
+Derived disruption policy: ${JSON.stringify(disruptionPolicy)}
+` : ``}
+
+--------------------------------------------------
+
+OUTPUT RULE:
+
+Return ONLY valid JSON. No explanation.
 
 {
   "city": string,
@@ -639,19 +939,27 @@ Return ONLY JSON:
   let retryCount = 0;
 
   try {
-    const response = await callWithRetry(() =>
-      groq.chat.completions.create({
-        model: GROQ_MODEL,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.2,
-        max_completion_tokens: 2500,
-      }),
-      {
-        onRetry: () => {
-          retryCount += 1;
-        },
-      }
-    );
+    const response = isReplan
+      ? await groq.chat.completions.create({
+          model: GROQ_MODEL,
+          messages: [{ role: 'user', content: systemPrompt }],
+          temperature: 0.2,
+          max_completion_tokens: 2500,
+        })
+      : await callWithRetry(
+          () =>
+            groq.chat.completions.create({
+              model: GROQ_MODEL,
+              messages: [{ role: 'user', content: systemPrompt }],
+              temperature: 0.2,
+              max_completion_tokens: 2500,
+            }),
+          {
+            onRetry: () => {
+              retryCount += 1;
+            },
+          }
+        );
     tokensUsed = extractTokensUsed(response);
 
     text = response.choices[0]?.message?.content || '{}';
@@ -664,13 +972,15 @@ Return ONLY JSON:
           userProfile,
           vibeOutput,
           logisticsOutput,
-          attractions
+          attractions,
+          { preserveDayNumbers: isReplan }
         ),
         tokensUsed,
         meta: {
           usedFallback: true,
           retryCount,
           llmSuccess: false,
+          correctedVibeNotes: 0,
         },
       };
   }
@@ -679,20 +989,24 @@ Return ONLY JSON:
     userProfile,
     vibeOutput,
     logisticsOutput,
-    attractions
+    attractions,
+    { preserveDayNumbers: isReplan }
   );
 
   const parsed = parseModelJson(text);
-  const normalized = normalizeParsedItinerary(parsed, fallback, attractions);
+  const normalized = normalizeParsedItinerary(parsed, fallback, attractions, {
+    preserveDayNumbers: isReplan,
+  });
 
   if (normalized) {
     return {
-      itinerary: normalized,
+      itinerary: normalized.itinerary,
       tokensUsed,
       meta: {
         usedFallback: false,
         retryCount,
         llmSuccess: true,
+        correctedVibeNotes: normalized.correctedVibeNotes,
       },
     };
   }
@@ -705,6 +1019,7 @@ Return ONLY JSON:
       usedFallback: true,
       retryCount,
       llmSuccess: false,
+      correctedVibeNotes: 0,
     },
   };
 }

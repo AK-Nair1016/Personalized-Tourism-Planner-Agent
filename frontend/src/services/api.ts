@@ -41,11 +41,15 @@ export async function generateItinerary(userProfile: UserProfile): Promise<Itine
   return maybeWrapped;
 }
 
+export function buildReplanRequestPayload(itineraryId: string, disruption: object) {
+  return { itineraryId, disruption };
+}
+
 export async function replanItinerary(itineraryId: string, disruption: object) {
   const response = await fetch(`${BASE_URL}/api/itinerary/replan`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ itinerary_id: itineraryId, disruption }),
+    body: JSON.stringify(buildReplanRequestPayload(itineraryId, disruption)),
   });
 
   if (!response.ok) {

@@ -25,7 +25,7 @@ import {
 type PipelineContext = {
   requestId?: string;
 
-  // 🔥 REPLAN SUPPORT
+  // Replan support context
   existingItinerary?: any;
 
   disruption?: {
@@ -618,7 +618,7 @@ export async function runPlannerGraph(
   context: PipelineContext = {}
 ) {
 
-  // 🔥 REPLAN: detect mode
+  // Section: detect replan mode
   const isReplan = !!context.disruption && !!context.existingItinerary;
   const disruption = context.disruption;
   const existingItinerary = context.existingItinerary;
@@ -662,7 +662,7 @@ export async function runPlannerGraph(
   }
 
   // 2. ATTRACTIONS
-  console.log("🔥 CALLING getEnhancedAttractions", {
+  console.log("[planner] calling getEnhancedAttractions", {
     cityId: city.id,
     cityName: city.name
   });
@@ -673,7 +673,7 @@ export async function runPlannerGraph(
     "top tourist attractions"
   );
 
-  console.log("🔥 ATTRACTIONS RECEIVED", {
+  console.log("[planner] attractions received", {
     count: attractions.length
   });
 

@@ -266,7 +266,6 @@ export async function replanItinerary(req: Request, res: Response, next: NextFun
       slot: normalizedDisruptionSlot,
     };
 
-    // ✅ FIX: singular model
     const existing = await prisma.itinerary.findUnique({
       where: { id: itineraryId }
     });

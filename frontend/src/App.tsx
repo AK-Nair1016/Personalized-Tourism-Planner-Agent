@@ -79,7 +79,7 @@
 import { useState } from 'react';
 import { defaultUserProfile } from '@vibetrip/shared/types/userProfile';
 import type { UserProfile } from '@vibetrip/shared/types/userProfile';
-import type { Itinerary as ItineraryData } from '@vibetrip/shared/types/Itinerary';
+import type { Itinerary as ItineraryData, ItinerarySlot } from '@vibetrip/shared/types/Itinerary';
 import { generateItinerary } from './services/api';
 import ProgressBar from './components/ui/ProgressBar';
 import VibePicker from './screens/VibePicker';
@@ -88,8 +88,11 @@ import Constraints from './screens/Constraints';
 import FineTune from './screens/FineTune';
 import Loading from './screens/Loading';
 import Itinerary from './screens/Itinerary';
+import ReplanModal from './components/ui/ReplanModal';
 
 const TOTAL_SCREENS = 4;
+
+
 
 // Type for API response meta (optional enhancement)
 interface ApiResponseMeta {
@@ -101,11 +104,18 @@ interface ApiResponseMeta {
   reconcilerRetryCount?: number;
 }
 
+type SelectedSlot = {
+  day: number;
+  slot: ItinerarySlot['slot'];
+};
+
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState(1);
   const [userProfile, setUserProfile] = useState<UserProfile>(defaultUserProfile);
   const [itinerary, setItinerary] = useState<ItineraryData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [selectedSlot, setSelectedSlot] = useState<SelectedSlot | null>(null);
+  const [isReplanning, setIsReplanning] = useState(false);
   // Store meta from API response to pass to Loading
   const [apiMeta, setApiMeta] = useState<ApiResponseMeta | undefined>(undefined);
 
@@ -195,7 +205,31 @@ export default function App() {
         />
       )}
       {currentScreen === 6 && itinerary && (
-        <Itinerary userProfile={userProfile} itinerary={itinerary} />
+        <>
+          <Itinerary
+            userProfile={userProfile}
+            itinerary={itinerary}
+            onSelectSlot={(day, slot) => {
+              setSelectedSlot({ day, slot });
+            }}
+          />
+          {selectedSlot && itinerary.id && (
+            <ReplanModal
+              selectedSlot={selectedSlot}
+              itineraryId={itinerary.id}
+              isReplanning={isReplanning}
+              setIsReplanning={setIsReplanning}
+              onClose={() => {
+                if (!isReplanning) {
+                  setSelectedSlot(null);
+                }
+              }}
+              onSuccess={(updated) => {
+                setItinerary(updated);
+              }}
+            />
+          )}
+        </>
       )}
     </div>
   );

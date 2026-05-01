@@ -954,6 +954,8 @@ export async function runPlannerGraph(
   }
 
   // 10. STORE
+  let storedItineraryId: string | undefined;
+
   if (!isReplan) {
     const storedItinerary = await runStage(context, 'db_store_itinerary', async () =>
       prisma.itinerary.create({
@@ -965,6 +967,8 @@ export async function runPlannerGraph(
         },
       })
     );
+
+    storedItineraryId = storedItinerary.id;
 
     logPipeline(context.requestId, 'db_store_itinerary_id', 'success', {
       itineraryId: storedItinerary.id,
@@ -979,6 +983,7 @@ export async function runPlannerGraph(
 
   return {
     itinerary,
+    itineraryId: storedItineraryId,
     tokensUsed,
     meta: executionMeta,
     replanContext: isReplan

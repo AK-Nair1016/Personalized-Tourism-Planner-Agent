@@ -33,6 +33,7 @@ type ItineraryDayLike = {
 };
 
 type ItineraryLike = {
+  id?: unknown;
   city?: unknown;
   currency?: unknown;
   total_cost_estimate?: unknown;
@@ -158,6 +159,7 @@ function localizeItineraryCosts(
   );
 
   return {
+    id: typeof itinerary.id === 'string' ? itinerary.id : undefined,
     city: asString(itinerary.city, 'Trip'),
     currency: localCurrencyCode,
     currency_symbol: localCurrencySymbol,
@@ -181,7 +183,7 @@ export async function generateItinerary(req: Request, res: Response, next: NextF
 
   try {
     const userProfile = req.body;
-    const { itinerary, tokensUsed, meta } = await runPlannerGraph(userProfile, { requestId });
+    const { itinerary, itineraryId, tokensUsed, meta } = await runPlannerGraph(userProfile, { requestId });
     const costAudit = buildCostAudit(itinerary as ItineraryLike);
     const cityForCurrency = await prisma.city.findFirst({
       where: { name: String(userProfile?.city ?? (itinerary as ItineraryLike)?.city ?? '') },
@@ -191,7 +193,7 @@ export async function generateItinerary(req: Request, res: Response, next: NextF
     const localCurrencySymbol =
       cityForCurrency?.country?.currencySymbol ?? getCurrencySymbol(localCurrencyCode);
     const localizedItinerary = localizeItineraryCosts(
-      itinerary as ItineraryLike,
+      { ...(itinerary as ItineraryLike), id: itineraryId },
       localCurrencyCode,
       localCurrencySymbol
     );
@@ -293,7 +295,10 @@ export async function replanItinerary(req: Request, res: Response, next: NextFun
     const localCurrencySymbol =
       cityForCurrency?.country?.currencySymbol ?? getCurrencySymbol(localCurrencyCode);
     const localizedItinerary = localizeItineraryCosts(
-      updatedItinerary.itinerary as ItineraryLike,
+      {
+        ...(updatedItinerary.itinerary as ItineraryLike),
+        id: itineraryId,
+      },
       localCurrencyCode,
       localCurrencySymbol
     );

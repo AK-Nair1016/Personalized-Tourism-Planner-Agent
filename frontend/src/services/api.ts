@@ -1,5 +1,5 @@
 import type { UserProfile } from '@vibetrip/shared/types/userProfile';
-import type { Itinerary as ItineraryData } from '@vibetrip/shared/types/Itinerary';
+import type { Itinerary as ItineraryData, ItinerarySlot } from '@vibetrip/shared/types/Itinerary';
 
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
@@ -41,11 +41,20 @@ export async function generateItinerary(userProfile: UserProfile): Promise<Itine
   return maybeWrapped;
 }
 
-export function buildReplanRequestPayload(itineraryId: string, disruption: object) {
+type ReplanDisruption = {
+  day: number;
+  slot: ItinerarySlot['slot'];
+  description: string;
+};
+
+export function buildReplanRequestPayload(itineraryId: string, disruption: ReplanDisruption) {
   return { itineraryId, disruption };
 }
 
-export async function replanItinerary(itineraryId: string, disruption: object) {
+export async function replanItinerary(
+  itineraryId: string,
+  disruption: ReplanDisruption
+): Promise<ItineraryData> {
   const response = await fetch(`${BASE_URL}/api/itinerary/replan`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -56,7 +65,13 @@ export async function replanItinerary(itineraryId: string, disruption: object) {
     throw new Error(`Failed to replan itinerary: ${response.status}`);
   }
 
-  return response.json();
+  const payload = (await response.json()) as unknown;
+
+  if (!isValidItineraryPayload(payload)) {
+    throw new Error('Backend returned invalid replanned itinerary payload');
+  }
+
+  return payload;
 }
 
 export async function getCities() {

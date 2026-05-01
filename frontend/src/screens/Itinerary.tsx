@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { UserProfile } from '@vibetrip/shared/types/userProfile';
-import type { Itinerary as ItineraryType } from '@vibetrip/shared/types/Itinerary';
+import type { Itinerary as ItineraryType, ItinerarySlot } from '@vibetrip/shared/types/Itinerary';
 import DayTabs from '../components/ui/DayTabs';
 import SlotCard from '../components/cards/SlotCard';
 import CostSummary from '../components/ui/CostSummary';
@@ -10,9 +10,10 @@ import styles from './Itinerary.module.css';
 interface ItineraryProps {
   userProfile: UserProfile;
   itinerary: ItineraryType;
+  onSelectSlot: (day: number, slot: ItinerarySlot['slot']) => void;
 }
 
-export default function Itinerary({ userProfile, itinerary }: ItineraryProps) {
+export default function Itinerary({ userProfile, itinerary, onSelectSlot }: ItineraryProps) {
   const [activeDay, setActiveDay] = useState(1);
   const safeDays = Array.isArray(itinerary?.days) ? itinerary.days : [];
   const fxInrToLocal =
@@ -33,6 +34,7 @@ export default function Itinerary({ userProfile, itinerary }: ItineraryProps) {
 
   const currentDay = safeDays.find((d) => d.day === activeDay) ?? safeDays[0];
   const dailyCapForDisplay = safeDays.length > 0 ? totalBudgetForDisplay / safeDays.length : 0;
+  const firstSlot = currentDay?.slots[0];
 
   return (
     <section className={styles.screen}>
@@ -76,6 +78,7 @@ export default function Itinerary({ userProfile, itinerary }: ItineraryProps) {
                   key={slot.attraction_id}
                   slot={slot}
                   currency={itinerary.currency}
+                  onClick={() => onSelectSlot(currentDay.day, slot.slot)}
                 />
               ))}
             </div>
@@ -88,14 +91,18 @@ export default function Itinerary({ userProfile, itinerary }: ItineraryProps) {
                 totalBudget={totalBudgetForDisplay}
                 currency={itinerary.currency}
             />
+
+            {firstSlot && (
+              <button
+                type="button"
+                className={styles.replanBtn}
+                onClick={() => onSelectSlot(currentDay.day, firstSlot.slot)}
+              >
+                Replan a slot
+              </button>
+            )}
           </>
         )}
-
-        {/* Replan button - Day 6 */}
-        <button className={styles.replanBtn}>
-          Replan a slot
-        </button>
-
       </div>
     </section>
   );

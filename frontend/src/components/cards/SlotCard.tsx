@@ -4,14 +4,15 @@ import type { ItinerarySlot } from '@vibetrip/shared/types/Itinerary';
 interface SlotCardProps {
   slot: ItinerarySlot;
   currency: string;
+  onClick?: () => void;
 }
 
-export default function SlotCard({ slot, currency }: SlotCardProps) {
+export default function SlotCard({ slot, currency, onClick }: SlotCardProps) {
   const showInrReference =
     typeof slot.estimated_cost_inr === 'number' && currency !== 'INR';
 
   return (
-    <div className={styles.card}>
+    <button type="button" className={styles.card} onClick={onClick}>
       <div className={styles.header}>
         <span className={styles.slotBadge}>{slot.slot}</span>
         <span className={styles.categoryBadge}>{slot.category}</span>
@@ -37,6 +38,6 @@ export default function SlotCard({ slot, currency }: SlotCardProps) {
           <span className={styles.duration}>{slot.duration_minutes} min</span>
         )}
       </div>
-    </div>
+    </button>
   );
 }

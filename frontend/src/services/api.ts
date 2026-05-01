@@ -3,6 +3,21 @@ import type { Itinerary as ItineraryData, ItinerarySlot } from '@vibetrip/shared
 
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
+export type ApiResponseMeta = {
+  tokensUsed?: number;
+  usedFallback?: boolean;
+  vibeFallback?: boolean;
+  reconcilerFallback?: boolean;
+  vibeRetryCount?: number;
+  reconcilerRetryCount?: number;
+};
+
+export type GenerateItineraryResponse = {
+  itinerary: ItineraryData;
+  tokensUsed?: number;
+  meta?: ApiResponseMeta;
+};
+
 function isValidItineraryPayload(value: unknown): value is ItineraryData {
   if (typeof value !== 'object' || value === null) return false;
   const candidate = value as Record<string, unknown>;
@@ -15,7 +30,9 @@ function isValidItineraryPayload(value: unknown): value is ItineraryData {
   );
 }
 
-export async function generateItinerary(userProfile: UserProfile): Promise<ItineraryData> {
+export async function generateItinerary(
+  userProfile: UserProfile
+): Promise<GenerateItineraryResponse> {
   const response = await fetch(`${BASE_URL}/api/itinerary/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -27,18 +44,20 @@ export async function generateItinerary(userProfile: UserProfile): Promise<Itine
   }
 
   const payload = (await response.json()) as unknown;
-  const maybeWrapped =
-    typeof payload === 'object' &&
-    payload !== null &&
-    'itinerary' in payload
-      ? (payload as { itinerary: unknown }).itinerary
-      : payload;
 
-  if (!isValidItineraryPayload(maybeWrapped)) {
+  if (!isValidItineraryPayload(payload)) {
     throw new Error('Backend returned invalid itinerary payload');
   }
 
-  return maybeWrapped;
+  const payloadRecord = payload as { tokensUsed?: unknown; meta?: unknown };
+  const meta = payloadRecord.meta as ApiResponseMeta | undefined;
+
+  return {
+    itinerary: payload,
+    tokensUsed:
+      typeof payloadRecord.tokensUsed === 'number' ? payloadRecord.tokensUsed : undefined,
+    meta,
+  };
 }
 
 type ReplanDisruption = {

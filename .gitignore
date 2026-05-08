@@ -14,7 +14,8 @@ backend/generated/
 dist/
 frontend/dist/
 
-# Context file
+# Documentation (keep only root README.md tracked)
+Docs/*.md
 CONTEXT.md
 
 # Logs
@@ -31,14 +32,3 @@ Thumbs.db
 
 # Prisma migrations lock (keep migrations folder but ignore this)
 prisma/migrations/migration_lock.toml
-```
-
----
-
-Place this file at the root of your project:
-```
-vibetrip/
-├── .gitignore    ← here
-├── frontend/
-├── backend/
-└── README.md
